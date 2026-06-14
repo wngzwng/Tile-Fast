@@ -147,6 +147,7 @@ Tile.Tooling 不应该依赖具体业务模块
 * 可复用
 * 少依赖
 * 不关心外部配置和输出
+* 自带可运行的默认能力
 
 ## 4.2 `Tile.Core` 应该包含哪些内容
 
@@ -160,6 +161,17 @@ Tile.Tooling 不应该依赖具体业务模块
 * `MathKit`、Softmax、WeightedChoice、距离计算、平均值等数学工具
 * 模拟相关的基础接口或结果抽象，例如 `SimulationContext`、`SimulationRunResult`
 * 纯分析能力，例如 DAG、解锁路径、簇分析、残留结构分析
+* 稳定、通用、默认可用的 Finder 与 Scorer 实现
+
+这里额外强调一个原则：
+
+`Tile.Core` 不是只能放抽象，也可以自带一套默认可运行实现。
+
+也就是：
+
+* `Core` 拿来就应该能启动基础运行
+* 不需要先依赖 `Services` 才能完成最基础的一次求解 / 模拟
+* 但放进 `Core` 的默认实现，必须是稳定、通用、能够代表项目基础能力的实现
 
 这些内容的共同特征通常是：
 
@@ -167,7 +179,7 @@ Tile.Tooling 不应该依赖具体业务模块
 * 不依赖控制台输出
 * 不依赖路径和文件系统流程
 * 不依赖具体命令
-* 不依赖某一种 scorer / finder / profile
+* 不依赖某一种只为实验存在的 profile
 
 ## 4.3 `Tile.Core` 不应该包含哪些内容
 
@@ -179,11 +191,16 @@ Tile.Tooling 不应该依赖具体业务模块
 * Console 日志和进度打印
 * `tile-eval` 命令编排逻辑
 * 大文件分片与结果合并流程
-* PiKa / Tokiki 这类具体业务评分器
+* 强场景化、强实验性的 scorer / finder
 * 面向某个业务场景的 finder / policy 组合器
 * 只为某个 CLI 命令服务的 DTO 或 Request
 
 因为这些内容都带有明显的“外部适配”或“业务试验”属性，不够稳定。
+
+这里要补一句边界说明：
+
+* 默认实现可以进 `Core`
+* 实验实现、场景实现、组合实现应放在 `Services`
 
 ## 4.4 `Tile.Core` 推荐子目录
 
@@ -209,7 +226,7 @@ Tile.Core/
 | --- | --- | --- |
 | `Core/` | 最核心的领域结构和静态结构 | 放 Tile、Level、Move、Zone、基础编码和静态映射 |
 | `Analysis/` | 稳定、可复用、和具体策略无关的纯分析能力 | 例如 DAG、解锁路径、簇分析、残留结构分析 |
-| `Simulation/` | 业务无关的模拟抽象与通用流程 | 可以放基础接口、通用运行流程、观察器接口，但不放具体业务策略组装 |
+| `Simulation/` | 业务无关的模拟抽象、通用流程与默认实现 | 可以放基础接口、通用运行流程、观察器接口，以及稳定默认的 Finder / Scorer |
 | `Common/` | 通用底层工具 | 放 `MathKit`、`BitSetOperations`、通用小型共享结构 |
 
 `Core/` 建议包含：
@@ -246,6 +263,7 @@ Tile.Core/
 | 它是否不依赖 TOML / CSV / Console？ | 是 |
 | 它是否偏基础结构或基础能力？ | 是 |
 | 它是否适合未来被 Godot 编辑器或其他入口复用？ | 是 |
+| 它是否是默认且稳定的实现？ | 通常是 |
 
 如果答案大部分是“否”，那它通常不适合进 `Tile.Core`。
 
@@ -265,16 +283,18 @@ Tile.Core/
 * `MaxClusterAnalyzer`
 * 业务无关的 `SimulationRunner`
 * `ISimulationObserver`
+* 默认的 `FseFinder`
+* 默认的 `PikaScorer`
 
 不适合放在 `Tile.Core`：
 
 * `TileEvalService`
-* `PiKaScorer`
-* `TokikiScorer`
 * `MetricExportService`
 * `BatchRunner`
 * `ConfigLoader`
 * `CsvResultWriter`
+* 强实验性的 `TokikiScorer`
+* 依赖特定业务场景拼装的 Finder / Policy 组合器
 
 ---
 
@@ -303,7 +323,7 @@ Tile.Core/
 
 * `TileEvalService` 这种面向完整用例的服务入口
 * 求解流程编排
-* finder / scorer / policy 的具体实现
+* finder / scorer / policy 的扩展实现、实验实现、场景实现
 * 行为组构造与选择策略
 * 运行时指标计算与聚合组织
 * 批量执行、分片、合并结果
@@ -311,6 +331,12 @@ Tile.Core/
 * 模拟器 Builder、组合检查、模块装配逻辑
 
 换句话说，`Tile.Services` 负责“把能力拼成任务”。
+
+如果说 `Tile.Core` 是“自带电池”，那么 `Tile.Services` 就是：
+
+* 替换电池
+* 并联更多电池
+* 组合不同能力做成完整业务任务
 
 ## 5.3 `Tile.Services` 不应该包含哪些内容
 
@@ -345,8 +371,8 @@ Tile.Services/
 | --- | --- | --- |
 | `Analysis/` | 面向业务场景的分析编排 | 依赖 `Tile.Core.Analysis`，补上与策略、流程、输出有关的分析组织 |
 | `Metrics/` | 指标结果结构、指标计算器、指标绑定逻辑 | 面向业务结果的指标体系 |
-| `Scorers/` | `PiKaScorer`、`TokikiScorer`、Feature Scorer | 评分逻辑 |
-| `Finders/` | 候选查找器、路径查找器、行为组查找器 | 候选生成逻辑 |
+| `Scorers/` | 扩展评分器、实验评分器、场景评分器 | 默认评分器可在 Core，Services 放扩展与替代实现 |
+| `Finders/` | 扩展候选查找器、路径查找器、行为组查找器 | 默认 Finder 可在 Core，Services 放扩展与替代实现 |
 | `Simulation/` | 业务相关模拟组装与任务执行入口 | 放策略组装、观察器适配器、指标适配器、Builder、tile-eval 主流程编排 |
 
 这里尤其要强调两层 `Analysis` 和两层 `Simulation` 的边界：
@@ -371,6 +397,11 @@ Tile.Services/
 * 放业务相关的模拟组装
 * 例如 finder / scorer / policy 的组合、指标观察器适配、Builder、tile-eval 运行入口
 
+这里和 `Core` 的关系可以理解成：
+
+* `Core` 提供一套默认可跑的基础能力
+* `Services` 在此基础上做替换、扩展、组装和场景化
+
 ## 5.5 `Tile.Services` 的判断标准
 
 一个类适合放进 `Tile.Services`，通常满足：
@@ -389,9 +420,9 @@ Tile.Services/
 
 * `TileEvalService`
 * `TileEvalBatchService`
-* `PiKaScorer`
+* 扩展版 `PikaScorer`
 * `TokikiScorer`
-* `FseFinder`
+* 扩展版 `FseFinder`
 * `BehaviourGroupBuilder`
 * `SolvePolicy`
 * `MetricCalculator`
