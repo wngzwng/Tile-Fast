@@ -1,6 +1,4 @@
-using System;
-
-namespace SolitaireWord.ExtensionTools;
+namespace Tile.Core.ExtensionTools;
 
 public static class CharExtensionTools
 {

@@ -40,6 +40,11 @@ public static class PackedXyzExtensionTools
             (byte)((value >> YShift) & Mask),
             (byte)((value >> ZShift) & Mask));
 
+    public static (byte row, byte col, byte z) UnpackRCZ(this int value)
+        => ( (byte)((value >> YShift) & Mask),
+            (byte)(value & Mask),
+            (byte)((value >> ZShift) & Mask));
+
     /// <summary>
     /// 读取 X 分量的 byte 版本。
     /// </summary>

@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Text;
 using Tile.Core.Core.Moves;
 using Tile.Core.Core.Types;
 using Tile.Core.ExtensionTools;
@@ -188,5 +189,68 @@ public partial class LevelCore
     }
 
 
+    public string Serialize()
+    {
+        var builder = new StringBuilder(_tiles.Length * 4);
+
+        const int Unspecified = -1;
+
+        const char LayerSeparator = ';';
+        const char RowSeparator = '.';
+        const char ColumnSeparator = ',';
+        const char SuitSeparator = ':';
+
+        var lastLayer = Unspecified;
+        var lastRow = Unspecified;
+
+        // 位置
+        for (var i = 0; i < _tiles.Length; i++)
+        {
+            var (row, col, layer) = _tiles[i].Position.UnpackRCZ();
+
+            var isNewLayer = layer != lastLayer;
+            var isNewRow = isNewLayer || row != lastRow;
+
+            if (isNewLayer)
+            {
+                if (lastLayer != Unspecified)
+                    builder.Append(LayerSeparator);
+
+                builder.Append(((int)layer).GetCharFromInt());
+                builder.Append(((int)row).GetCharFromInt());
+                builder.Append(((int)col).GetCharFromInt());
+
+                lastLayer = layer;
+                lastRow = row;
+
+                continue;
+            }
+
+            if (isNewRow)
+            {
+                builder.Append(RowSeparator);
+                builder.Append(((int)row).GetCharFromInt());
+                builder.Append(((int)col).GetCharFromInt());
+
+                lastRow = row;
+
+                continue;
+            }
+
+            builder.Append(ColumnSeparator);
+            builder.Append(((int)col).GetCharFromInt());
+        }
+
+        // 花色
+        if (_tiles.Length > 0 && _tiles[0].Suit != Tile.SuitUnspecified)
+        {
+            builder.Append(SuitSeparator);
+
+            for (var i = 0; i < _tiles.Length; i++)
+                builder.Append(_tiles[i].Suit.GetCharFromInt());
+        }
+
+        return builder.ToString();
+    }
 
 }
