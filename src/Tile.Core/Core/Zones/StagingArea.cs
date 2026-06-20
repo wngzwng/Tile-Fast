@@ -1,258 +1,135 @@
-using ThreeTile.Core.WngZwng.Core.Types;
+using Tile.Core.Core.Mapping;
 
-namespace ThreeTile.Core.WngZwng.Core.Zones;
-
-/// <summary>
-/// 暂存槽 / 卡槽区域。
-///
-/// 职责：
-/// - 维护当前在槽中的 Tile
-/// - 维护按颜色分组
-/// - 维护运行时容量
-///
-/// 不负责：
-/// - 匹配策略选择
-/// - 自动消除策略
-/// - Move 生成与评分
-/// </summary>
+namespace Tile.Core.Core.Zones;
 public sealed class StagingArea
 {
-    private readonly HashSet<int> _tileIndexSet = new();
-    private readonly Dictionary<int, List<int>> _colorGroups = new();
-    private List<int> _colorSortList;
+    private readonly TileMappingTable _mapping;
 
-    public StagingArea(LevelCore level)
+    private readonly int _matchRequireCount;
+    private readonly int _capacity;
+
+    private readonly int[] _tiles;
+    private int _count;
+
+    public int MatchRequireCount => _matchRequireCount;
+
+    public int Capacity => _capacity;
+
+    public int Count => _count;
+
+    public int AvailableCapacity => _capacity - _count;
+
+    public bool IsFull => _count >= _capacity;
+
+    public bool IsEmpty => _count == 0;
+
+    public ReadOnlySpan<int> Tiles => _tiles.AsSpan(0, _count);
+
+    public StagingArea(
+        TileMappingTable mapping,
+        LevelRuleSpec ruleSpec)
     {
-        Parent = level ?? throw new ArgumentNullException(nameof(level));
-        Capacity = level.SlotCapacity;
-        _colorSortList = new List<int>(Capacity);
+        _mapping = mapping ?? throw new ArgumentNullException(nameof(mapping));
+
+        if (ruleSpec is null)
+            throw new ArgumentNullException(nameof(ruleSpec));
+
+        _matchRequireCount = ruleSpec.MatchRequireCount;
+        _capacity = ruleSpec.SlotCapacity;
+
+        _tiles = new int[_capacity];
     }
 
-    public LevelCore Parent { get; }
-
-    /// <summary>关卡要求的配对消除数。</summary>
-    public int MatchRequireCount => Parent.MatchRequireCount;
-
-    /// <summary>当前运行时容量，可用于模拟时临时扩容。</summary>
-    public int Capacity { get; private set; }
-
-    public SlotTypeEnum SlotType => Parent.SlotType;
-
-    public int TileCount => _tileIndexSet.Count;
-    public int UsedCapacity => _tileIndexSet.Count;
-
-    public int AvailableCapacity => Capacity - TileCount;
-
-    public bool IsFull => TileCount >= Capacity;
-
-    public bool IsEmpty => TileCount == 0;
-
-    /// <summary>
-    /// 当前槽中颜色集合快照。
-    /// </summary>
-    public int[] GetColors()
+    public void Add(int tileIndex)
     {
-        if (_colorSortList.Count == 0)
-            return Array.Empty<int>();
+        ValidateTileIndex(tileIndex);
 
-        return _colorSortList.ToArray();
+        if (IsFull)
+            throw new InvalidOperationException("Staging area is full.");
+
+        _tiles[_count++] = tileIndex;
     }
 
-    public bool ContainsTile(int tileIndex)
+    public int GetSuitCount(int suit)
     {
-        return _tileIndexSet.Contains(tileIndex);
-    }
+        var count = 0;
 
-    public int GetColorCount(int color)
-    {
-        return _colorGroups.TryGetValue(color, out var group) ? group.Count : 0;
-    }
-
-    public Dictionary<int, int> GetColorCountMap()
-    {
-        return _colorGroups.ToDictionary(kv => kv.Key, kv => kv.Value.Count);
-    }
-
-    /// <summary>
-    /// 获取某颜色在槽中的 tileIndex 快照。
-    /// </summary>
-    public int[] GetTilesOfColor(int color)
-    {
-        return _colorGroups.TryGetValue(color, out var group)
-            ? group.ToArray()
-            : Array.Empty<int>();
-    }
-
-    public void SetCapacity(int capacity)
-    {
-        if (capacity < 0)
-            throw new ArgumentOutOfRangeException(nameof(capacity));
-
-        if (capacity < TileCount)
+        for (var i = 0; i < _count; i++)
         {
-            throw new InvalidOperationException(
-                $"Cannot set capacity to {capacity}, current tile count is {TileCount}.");
+            if (_mapping.GetSuit(_tiles[i]) == suit)
+                count++;
         }
 
-        Capacity = capacity;
-        _colorSortList.Capacity = capacity;
+        return count;
     }
 
-    public void Reset()
+    public bool CanMatch(int suit)
     {
-        _tileIndexSet.Clear();
-        _colorGroups.Clear();
-        Capacity = Parent.SlotCapacity;
-        _colorSortList.Clear();
-        _colorSortList.Capacity = Capacity;
+        return GetSuitCount(suit) >= _matchRequireCount;
     }
 
-    public StagingArea Clone(LevelCore newParent)
+    public bool TryMatch(
+        int suit,
+        Span<int> removedTiles,
+        out int removedCount)
     {
-        if (newParent is null)
-            throw new ArgumentNullException(nameof(newParent));
+        removedCount = 0;
 
-        var clone = new StagingArea(newParent);
-        clone.Capacity = Capacity;
-
-        foreach (var tileIndex in _tileIndexSet)
-            clone._tileIndexSet.Add(tileIndex);
-
-        foreach (var (color, group) in _colorGroups)
-            clone._colorGroups[color] = new List<int>(group);
-
-        clone._colorSortList = new List<int>(_colorSortList)
-        {
-            Capacity = Capacity
-        };
-
-        return clone;
-    }
-
-    /// <summary>
-    /// 向槽中加入一个 tile。
-    /// 重复加入直接忽略。
-    /// </summary>
-    public void AddTile(int tileIndex)
-    {
-        if (!Parent.TryGetTileByIndex(tileIndex, out var tile))
-            return;
-
-        if (!_tileIndexSet.Add(tileIndex))
-            return;
-
-        if (_tileIndexSet.Count > Capacity)
-        {
-            _tileIndexSet.Remove(tileIndex);
-            throw new InvalidOperationException(
-                $"StagingArea is full. Capacity={Capacity}, Count={TileCount}");
-        }
-
-        if (!_colorGroups.TryGetValue(tile.Color, out var group))
-        {
-            group = new List<int>();
-            _colorGroups.Add(tile.Color, group);
-            _colorSortList.Add(tile.Color);
-        }
-
-        group.Add(tileIndex);
-    }
-
-    /// <summary>
-    /// 从槽中移除一个 tile。
-    /// 不存在则忽略。
-    /// </summary>
-    public void RemoveTile(int tileIndex)
-    {
-        if (!_tileIndexSet.Remove(tileIndex))
-            return;
-
-        if (!Parent.TryGetTileByIndex(tileIndex, out var tile))
-            return;
-
-        if (!_colorGroups.TryGetValue(tile.Color, out var group))
-            return;
-
-        group.Remove(tileIndex);
-        if (group.Count == 0)
-        {
-            _colorGroups.Remove(tile.Color);
-            _colorSortList.Remove(tile.Color);
-        }
-    }
-
-    /// <summary>
-    /// 移除某颜色的全部 tile，并返回被移除的 tileIndex。
-    /// </summary>
-    public int[] RemoveColor(int color)
-    {
-        if (!_colorGroups.Remove(color, out var group) || group.Count == 0)
-            return Array.Empty<int>();
-
-        var removed = group.ToArray();
-
-        foreach (var tileIndex in removed)
-            _tileIndexSet.Remove(tileIndex);
-
-        _colorSortList.Remove(color);
-
-        return removed;
-    }
-
-    /// <summary>
-    /// 当前该颜色是否已达到可匹配条件。
-    /// </summary>
-    public bool CanMatch(int color)
-    {
-        return GetColorCount(color) >= MatchRequireCount;
-    }
-
-    /// <summary>
-    /// 查看当前该颜色若执行一次匹配，将取出的 tileIndex。
-    /// 不修改内部状态。
-    /// </summary>
-    public int[] PeekMatch(int color)
-    {
-        if (!_colorGroups.TryGetValue(color, out var group))
-            return Array.Empty<int>();
-
-        if (group.Count < MatchRequireCount)
-            return Array.Empty<int>();
-
-        var result = new int[MatchRequireCount];
-        for (int i = 0; i < MatchRequireCount; i++)
-            result[i] = group[i];
-
-        return result;
-    }
-
-    /// <summary>
-    /// 尝试执行一次匹配。
-    /// 若成功，移除该颜色的一组 tile。
-    /// </summary>
-    public bool TryMatch(int color, out int[] matchedTileIndexes)
-    {
-        matchedTileIndexes = PeekMatch(color);
-        if (matchedTileIndexes.Length == 0)
+        if (!CanMatch(suit))
             return false;
 
-        if (!_colorGroups.TryGetValue(color, out var group))
+        if (removedTiles.Length < _matchRequireCount)
+            throw new ArgumentException(
+                "Removed tile buffer is too small.",
+                nameof(removedTiles));
+
+        var write = 0;
+
+        for (var read = 0; read < _count; read++)
         {
-            matchedTileIndexes = Array.Empty<int>();
-            return false;
+            var tileIndex = _tiles[read];
+
+            if (_mapping.GetSuit(tileIndex) == suit &&
+                removedCount < _matchRequireCount)
+            {
+                removedTiles[removedCount++] = tileIndex;
+                continue;
+            }
+
+            _tiles[write++] = tileIndex;
         }
 
-        foreach (var tileIndex in matchedTileIndexes)
-            _tileIndexSet.Remove(tileIndex);
-
-        group.RemoveRange(0, matchedTileIndexes.Length);
-
-        if (group.Count == 0)
-        {
-            _colorGroups.Remove(color);
-            _colorSortList.Remove(color);
-        }
-
+        _count = write;
         return true;
+    }
+
+    private void ValidateTileIndex(int tileIndex)
+    {
+        if ((uint)tileIndex >= (uint)_mapping.TileCount)
+            throw new ArgumentOutOfRangeException(nameof(tileIndex));
+    }
+
+    private StagingArea(
+        TileMappingTable mapping,
+        int matchRequireCount,
+        int capacity,
+        int[] tiles,
+        int count)
+    {
+        _mapping = mapping ?? throw new ArgumentNullException(nameof(mapping));
+        _matchRequireCount = matchRequireCount;
+        _capacity = capacity;
+        _tiles = tiles ?? throw new ArgumentNullException(nameof(tiles));
+        _count = count;
+    }
+
+    public StagingArea Clone()
+    {
+        return new StagingArea(
+            _mapping,
+            _matchRequireCount,
+            _capacity,
+            (int[])_tiles.Clone(),
+            _count);
     }
 }

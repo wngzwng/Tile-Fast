@@ -3,19 +3,11 @@ using Tile.Core.ExtensionTools;
 namespace Tile.Core;
 
 /// <summary>
-/// 表示 Tile 当前所在的静态区域类型。
-/// </summary>
-public enum TileZone
-{
-    Unspecified = 0,
-    Pasture = 1,
-    StagingArea = 2,
-    Corral = 3,
-}
-
-/// <summary>
 /// 表示单张 Tile 的必要静态事实。
-/// 这一层只保存 Tile 本身的信息，不承担全局索引映射职责。
+/// 
+/// Tile 只描述自身的编号、花色、空间位置和体积；
+/// 不记录自己当前属于 Pasture、StagingArea 还是 Corral。
+/// Tile 的运行时归属关系由 LevelCore / Pasture / StagingArea / Corral 维护。
 /// </summary>
 public sealed class Tile(int index, int position) : IEquatable<Tile>
 {
@@ -63,12 +55,6 @@ public sealed class Tile(int index, int position) : IEquatable<Tile>
     public int Volume { get; } = DefaultVolume;
 
     /// <summary>
-    /// Tile 当前所在区域。
-    /// 默认在 <see cref="TileZone.Unspecified"/>。
-    /// </summary>
-    public TileZone Zone { get; private set; } = TileZone.Unspecified;
-
-    /// <summary>
     /// Tile 顶面所在的 z 值。
     /// 公式：<c>topZ = z0 + dz - 1</c>。
     /// </summary>
@@ -110,8 +96,10 @@ public sealed class Tile(int index, int position) : IEquatable<Tile>
     }
 
     /// <summary>
-    /// 更新 Tile 的空间位置。
-    /// 这里只改 <see cref="Position"/>，不强制修改 <see cref="Zone"/>。
+    /// 更新 Tile 的盘面空间位置。
+    /// 
+    /// 这里只修改 Tile 自身的位置事实；
+    /// 不处理 Tile 当前是否仍在 Pasture 中。
     /// </summary>
     public void SetPasturePosition(int position)
     {
@@ -119,20 +107,11 @@ public sealed class Tile(int index, int position) : IEquatable<Tile>
     }
 
     /// <summary>
-    /// 更新 Tile 当前所在区域。
-    /// </summary>
-    public void SetZone(TileZone zone)
-    {
-        Zone = zone;
-    }
-
-    /// <summary>
     /// 返回 Position 解包后的三维坐标。
     /// </summary>
     public (int x, int y, int z) GetPositionXyz()
     {
-        var (x, y, z) = Position.UnpackXyz();
-        return (x, y, z);
+        return Position.UnpackXyz();
     }
 
     /// <summary>
@@ -140,8 +119,7 @@ public sealed class Tile(int index, int position) : IEquatable<Tile>
     /// </summary>
     public (int dx, int dy, int dz) GetVolumeXyz()
     {
-        var (dx, dy, dz) = Volume.UnpackXyz();
-        return (dx, dy, dz);
+        return Volume.UnpackXyz();
     }
 
     public bool Equals(Tile? other)
@@ -155,8 +133,7 @@ public sealed class Tile(int index, int position) : IEquatable<Tile>
         return Index == other.Index &&
                Suit == other.Suit &&
                Position == other.Position &&
-               Volume == other.Volume &&
-               Zone == other.Zone;
+               Volume == other.Volume;
     }
 
     public override bool Equals(object? obj)
@@ -166,11 +143,12 @@ public sealed class Tile(int index, int position) : IEquatable<Tile>
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(Index, Suit, Position, Volume, Zone);
+        return HashCode.Combine(Index, Suit, Position, Volume);
     }
 
     public override string ToString()
     {
-        return $"Tile(Index={Index}, Suit={Suit}, Position={Position.ToXyzString()}, Volume={Volume.ToXyzString()}, Zone={Zone})";
+        return $"Tile(Index={Index}, Suit={Suit}, Position={Position.ToXyzString()}, Volume={Volume.ToXyzString()})";
     }
 }
+
