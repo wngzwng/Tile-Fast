@@ -14,33 +14,8 @@ public sealed class Corral
             throw new ArgumentOutOfRangeException(nameof(tileCount), "Tile count cannot be negative.");
 
         _tiles = new int[tileCount];
+        Array.Fill<int>(_tiles, -1);
     }
-
-
-    public bool TryPeek(out int tileIndex)
-    {
-        if (_offset >= _tiles.Length)
-        {
-            tileIndex = -1;
-            return false;
-        }
-
-        tileIndex = _tiles[_offset];
-        return true;
-    }
-
-    public bool TryTake(out int tileIndex)
-    {
-        if (_offset >= _tiles.Length)
-        {
-            tileIndex = -1;
-            return false;
-        }
-
-        tileIndex = _tiles[_offset++];
-        return true;
-    }
-
 
     public void Add(int tileIndex)
     {
@@ -49,6 +24,20 @@ public sealed class Corral
 
         _tiles[_offset] = tileIndex;
         _offset++;
+    }
+
+    public void Remove(int tileCount)
+    {
+        if (tileCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(tileCount));
+
+        if (tileCount > _offset)
+            throw new InvalidOperationException(
+                $"无法移除 {tileCount} 个 tile，当前只有 {_offset} 个。");
+
+        _offset -= tileCount;
+
+        _tiles.AsSpan(_offset, tileCount).Fill(-1);
     }
 
 

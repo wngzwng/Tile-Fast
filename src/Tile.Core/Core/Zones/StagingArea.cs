@@ -10,6 +10,8 @@ public sealed class StagingArea
 
     private readonly int[] _tiles;
     private int _count;
+    private readonly int[] _orderSuits;
+    private int _orderSuitIndex;
 
     public int MatchRequireCount => _matchRequireCount;
 
@@ -38,6 +40,7 @@ public sealed class StagingArea
         _capacity = ruleSpec.SlotCapacity;
 
         _tiles = new int[_capacity];
+        _orderSuits = new int[_capacity];
     }
 
     public void Add(int tileIndex)
@@ -48,6 +51,47 @@ public sealed class StagingArea
             throw new InvalidOperationException("Staging area is full.");
 
         _tiles[_count++] = tileIndex;
+        
+        var suit = _mapping.GetSuit(tileIndex);
+        if (_orderSuits.AsSpan(0, _orderSuitIndex + 1).Contains(suit))
+           return;
+        
+        _orderSuits[_orderSuitIndex++] = suit;
+    }
+
+    public void Remove(int tileIndex)
+    {
+        ValidateTileIndex(tileIndex);
+
+        var index = Array.IndexOf(_tiles, tileIndex, 0, _count);
+        if (index < 0)
+            throw new InvalidOperationException($"Tile {tileIndex} is not in staging area.");
+
+        // 将 index 之后的元素前移一位
+        Array.Copy(_tiles, index + 1, _tiles, index, _count - index - 1);
+        _count--;
+
+        // 获取对应花色，组内无对应花色其他棋子，移除此花色
+        var suit = _mapping.GetSuit(tileIndex);
+        var hasSameSuit = false;
+        for (var i = 0; i < _count; i++)
+        {
+            if (_mapping.GetSuit(_tiles[i]) == suit)
+            {
+                hasSameSuit = true;
+                break;
+            }
+        }   
+        if (hasSameSuit)
+            return;
+
+        var suitIndex = Array.IndexOf(_orderSuits, suit, 0, _orderSuitIndex);
+        if (suitIndex < 0)
+            return;
+
+        // 将 suitIndex 之后的元素前移一位
+        Array.Copy(_orderSuits, suitIndex + 1, _orderSuits, suitIndex, _orderSuitIndex - suitIndex - 1);
+        _orderSuitIndex--;
     }
 
     public int GetSuitCount(int suit)
@@ -68,38 +112,32 @@ public sealed class StagingArea
         return GetSuitCount(suit) >= _matchRequireCount;
     }
 
-    public bool TryMatch(
-        int suit,
-        Span<int> removedTiles,
-        out int removedCount)
+    public bool TryMatch(int suit, out int[] matchedTileIds)
     {
-        removedCount = 0;
+        matchedTileIds = null;
 
         if (!CanMatch(suit))
             return false;
 
-        if (removedTiles.Length < _matchRequireCount)
-            throw new ArgumentException(
-                "Removed tile buffer is too small.",
-                nameof(removedTiles));
-
+        // 收集对应花色的棋子
+        int[] sameSuitTiles = new int[_matchRequireCount];
+    
         var write = 0;
-
         for (var read = 0; read < _count; read++)
         {
             var tileIndex = _tiles[read];
 
-            if (_mapping.GetSuit(tileIndex) == suit &&
-                removedCount < _matchRequireCount)
-            {
-                removedTiles[removedCount++] = tileIndex;
-                continue;
-            }
-
-            _tiles[write++] = tileIndex;
+            if (_mapping.GetSuit(tileIndex) == suit)
+                sameSuitTiles[write++] = tileIndex;
         }
 
-        _count = write;
+        // 移除对应花色的棋子   
+        for (var i = 0; i < _matchRequireCount; i++)
+        {
+            Remove(sameSuitTiles[i]);
+        }
+        matchedTileIds = sameSuitTiles;
+
         return true;
     }
 

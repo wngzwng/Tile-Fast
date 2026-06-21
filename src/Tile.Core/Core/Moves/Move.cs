@@ -13,10 +13,9 @@ namespace Tile.Core.Core.Moves;
 public abstract class Move
 {
     /// <summary>
-    /// 返回该操作涉及的 Tile 编号集合。
-    /// 这里使用 TileIds 命名，保持和上层操作语义一致。
+    /// 返回该操作涉及的 Tile 编号。
     /// </summary>
-    public abstract int[] TileIds { get; }
+    public int TileIndex { get; init; }
 
     /// <summary>
     /// 判断该操作当前是否可以在指定关卡上执行。

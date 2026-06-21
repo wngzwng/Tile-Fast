@@ -222,13 +222,7 @@ public sealed class TileMappingTable
             occupiedRegionIdsByTileIndexFlat,
             tileIndexByRegionId);
 
-        BuildAffectedTileBitsMvp(
-            tileArray,
-            lockRule,
-            wordCount,
-            affectedTileBitsByTileIndexFlat);
-
-        return new TileMappingTable(
+        var mapping = new TileMappingTable(
             tileArray,
             lockRule,
             wordCount,
@@ -241,6 +235,15 @@ public sealed class TileMappingTable
             tileBitsBySuitFlat,
             affectedTileBitsByTileIndexFlat,
             suitBits);
+
+        mapping.BuildAffectedTileBits(
+            tileArray,
+            lockRule,
+            wordCount,
+            affectedTileBitsByTileIndexFlat);
+        
+        return mapping;
+        
     }
 
     public Tile GetTile(int tileIndex)
@@ -441,58 +444,161 @@ public sealed class TileMappingTable
             }
         }
     }
-
-    private static void BuildAffectedTileBitsMvp(
+    
+    private  void BuildAffectedTileBits(
         Tile[] tiles,
         LockRuleTypeEnum lockRule,
         int wordCount,
         ulong[] affectedTileBitsByTileIndexFlat)
     {
-        foreach (var removedTile in tiles)
+        
+        var boardBounds = PositionPacker.PackXyz(MaxCol, MaxRow, MaxLayer);
+        foreach (var tile in tiles)
         {
             var affectedBits = affectedTileBitsByTileIndexFlat.AsSpan(
-                removedTile.Index * wordCount,
+                tile.Index * wordCount,
                 wordCount);
 
-            foreach (var candidate in tiles)
-            {
-                if (removedTile.Index == candidate.Index)
-                    continue;
+            var (startX, startY, startZ) = PositionPacker.UnpackXyz(tile.Position);
 
-                if (CanBeAffectedByRemoveMvp(
-                        removedTile,
-                        candidate,
-                        lockRule))
-                {
-                    BitSetOperations.Set(
-                        affectedBits,
-                        candidate.Index);
-                }
+            // ------------------------------------------------------------
+            // 1. 收集下方受影响的棋子
+            //
+            // 当前 Tile 默认覆盖 2x2 面：
+            // (x,     y)
+            // (x + 1, y)
+            // (x,     y + 1)
+            // (x + 1, y + 1)
+            //
+            // 对每个覆盖点，从当前层下方开始向下探测。
+            // 每个垂直柱只命中第一个棋子。
+            // ------------------------------------------------------------
+            if (startZ > 0)
+            {
+                AddFirstHitBelow(
+                    startX,
+                    startY,
+                    startZ,
+                    affectedBits);
+
+                AddFirstHitBelow(
+                    startX + 1,
+                    startY,
+                    startZ,
+                    affectedBits);
+
+                AddFirstHitBelow(
+                    startX,
+                    startY + 1,
+                    startZ,
+                    affectedBits);
+
+                AddFirstHitBelow(
+                    startX + 1,
+                    startY + 1,
+                    startZ,
+                    affectedBits);
             }
+
+            // ------------------------------------------------------------
+            // 2. Classic 规则额外收集左右锁定相关棋子
+            //
+            // Tile 模式：
+            // 只关心上下遮挡关系。
+            //
+            // Classic 模式：
+            // 还要关心左右方向上的邻接棋子。
+            //
+            // 当前 Tile 默认占用 2x2 面：
+            // 左侧边界：x
+            // 右侧边界：x + 1
+            //
+            // 因此：
+            // - 左侧检查 (x, y, z) 和 (x, y + 1, z) 的左邻居
+            // - 右侧检查 (x + 1, y, z) 和 (x + 1, y + 1, z) 的右邻居
+            // ------------------------------------------------------------
+            if (lockRule == LockRuleTypeEnum.Classic)
+            {
+                AddNeighborHit(
+                    NeighborDir.Left,
+                    PositionPacker.PackXyz(startX, startY, startZ),
+                    boardBounds,
+                    affectedBits);
+
+                AddNeighborHit(
+                    NeighborDir.Left,
+                    PositionPacker.PackXyz(startX, startY + 1, startZ),
+                    boardBounds,
+                    affectedBits);
+
+                AddNeighborHit(
+                    NeighborDir.Right,
+                    PositionPacker.PackXyz(startX + 1, startY, startZ),
+                    boardBounds,
+                    affectedBits);
+
+                AddNeighborHit(
+                    NeighborDir.Right,
+                    PositionPacker.PackXyz(startX + 1, startY + 1, startZ),
+                    boardBounds,
+                    affectedBits);
+            }
+        }
+
+       
+
+        void AddNeighborHit(
+            NeighborDir dir,
+            int position,
+            int bounds,
+            Span<ulong> affectedBits)
+        {
+            var next = dir.Move(position, bounds, out var isOver);
+
+            if (isOver)
+                return;
+
+            if (TryGetTileIndexAtPosition(next, out var tileIndex))
+                BitSetOperations.Set(affectedBits, tileIndex);
         }
     }
 
-    private static bool CanBeAffectedByRemoveMvp(
-        Tile removedTile,
-        Tile candidate,
-        LockRuleTypeEnum lockRule)
+    public void AddNeighborHit(
+            NeighborDir dir,
+            int position,
+            int bounds,
+            Span<ulong> affectedBits)
+        {
+            var next = dir.Move(position, bounds, out var isOver);
+
+            if (isOver)
+                return;
+
+            if (TryGetTileIndexAtPosition(next, out var tileIndex))
+                BitSetOperations.Set(affectedBits, tileIndex);
+        }
+
+     void AddFirstHitBelow(
+            int x,
+            int y,
+            int startZ,
+            Span<ulong> affectedBits)
     {
-        // 
-        // MVP 保守实现：
-        // 只要两个 Tile 的默认体积包围盒接触或重叠，
-        // 就认为 candidate 理论上可能受 removedTile 影响。
-        //
-        // 注意：
-        // AffectedByTile 只是“需要重新检查的静态候选集合”，
-        // 不表示 candidate 一定会变可见或变可选。
-        //
-        // 后续可以在这里替换成 Classic / Tile 的精确空间规则。
+        for (var z = startZ - 1; z >= 0; z--)
+        {
+            var position = PositionPacker.PackXyz(x, y, z);
 
-        var removedBounds = TileBounds.FromTileDefaultVolume(removedTile);
-        var candidateBounds = TileBounds.FromTileDefaultVolume(candidate);
+            if (!TryGetTileIndexAtPosition(position, out var tileIndex))
+                continue;
 
-        return removedBounds.TouchOrOverlap(candidateBounds);
+            BitSetOperations.Set(affectedBits, tileIndex);
+            break;
+        }
     }
+
+    
+
+
 
 
     /// <summary>

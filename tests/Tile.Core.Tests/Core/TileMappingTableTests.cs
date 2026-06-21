@@ -1,4 +1,6 @@
 using NUnit.Framework;
+using Tile.Core.Core.Mapping;
+using Tile.Core.Core.Types;
 using Tile.Core.ExtensionTools;
 
 namespace Tile.Core.Tests.Core;
@@ -15,7 +17,7 @@ public sealed class TileMappingTableTests
             CreateTile(index: 2, suit: 1, position: (0, 2, 0).PackXyz())
         ];
 
-        var table = new TileMappingTable(tiles);
+        var table = CreateTable(tiles);
 
         Assert.That(table.TileCount, Is.EqualTo(3));
     }
@@ -24,10 +26,20 @@ public sealed class TileMappingTableTests
     public void GetCoordinatesByTileIndex_ReturnsExpandedFootprint()
     {
         var tile = CreateTile(index: 0, suit: 1, position: (1, 2, 3).PackXyz());
-        var table = new TileMappingTable([tile]);
+        var table = CreateTable([tile]);
 
         // 默认体积是 (2, 2, 1)，所以应展开为四个平面坐标。
-        var coordinates = table.GetCoordinatesByTileIndex(0).ToArray();
+        var regionIds = table.GetOccupiedRegionIds(0);
+        var coordinates = new int[regionIds.Length];
+
+        for (var i = 0; i < regionIds.Length; i++)
+        {
+            var regionId = regionIds[i];
+            coordinates[i] = table.GetPosition(0)
+                .WithX(regionId % table.MaxCol)
+                .WithY((regionId / table.MaxCol) % table.MaxRow)
+                .WithZ(regionId / (table.MaxCol * table.MaxRow));
+        }
 
         Assert.That(coordinates.Length, Is.EqualTo(4));
         Assert.That(coordinates, Is.EqualTo(new[]
@@ -42,39 +54,47 @@ public sealed class TileMappingTableTests
     [Test]
     public void RegionQueries_EmptyLocation_ReturnsMinusOne()
     {
-        var table = new TileMappingTable(
+        var table = TileMappingTable.Create(
         [
             CreateTile(index: 0, suit: 1, position: (0, 0, 0).PackXyz())
-        ]);
+        ],
+            LockRuleTypeEnum.Tile,
+            maxCol: 4,
+            maxRow: 4,
+            maxLayer: 1);
 
         // 这里重点验证“未命中时返回 -1”这个默认约定。
-        Assert.That(table.GetTileIndexAt(3, 3, 0), Is.EqualTo(TileMappingTable.EmptyTileIndex));
-        Assert.That(table.GetTileIndexAtPosition((3, 3, 0).PackXyz()), Is.EqualTo(TileMappingTable.EmptyTileIndex));
+        Assert.That(table.TryGetTileIndexAtPosition((3, 3, 0).PackXyz(), out var tileIndex), Is.False);
+        Assert.That(tileIndex, Is.EqualTo(-1));
     }
 
     [Test]
     public void TryGetTileIndexAt_WhenMissing_ReturnsFalseAndMinusOne()
     {
-        var table = new TileMappingTable(
+        var table = TileMappingTable.Create(
         [
             CreateTile(index: 0, suit: 1, position: (0, 0, 0).PackXyz())
-        ]);
+        ],
+            LockRuleTypeEnum.Tile,
+            maxCol: 8,
+            maxRow: 8,
+            maxLayer: 1);
 
-        var ok = table.TryGetTileIndexAt(7, 7, 0, out var tileIndex);
+        var ok = table.TryGetTileIndexAtPosition((7, 7, 0).PackXyz(), out var tileIndex);
 
         Assert.That(ok, Is.False);
-        Assert.That(tileIndex, Is.EqualTo(TileMappingTable.EmptyTileIndex));
+        Assert.That(tileIndex, Is.EqualTo(-1));
     }
 
     [Test]
     public void Indexer_WithXyz_ReturnsTileIndex()
     {
-        var table = new TileMappingTable(
+        var table = CreateTable(
         [
             CreateTile(index: 0, suit: 1, position: (1, 1, 0).PackXyz())
         ]);
 
-        Assert.That(table[1, 1, 0], Is.EqualTo(0));
+        Assert.That(table.GetTileIndexAtPosition((1, 1, 0).PackXyz()), Is.EqualTo(0));
     }
 
     [Test]
@@ -82,7 +102,7 @@ public sealed class TileMappingTableTests
     {
         var tile = new Tile(index: 0, position: (0, 0, 0).PackXyz());
 
-        Assert.DoesNotThrow(() => _ = new TileMappingTable([tile]));
+        Assert.DoesNotThrow(() => _ = CreateTable([tile]));
     }
 
     [Test]
@@ -95,7 +115,7 @@ public sealed class TileMappingTableTests
         ];
 
         // Tile.Index 目前约定必须连续 0-based，缺口不允许静默放过。
-        Assert.Throws<ArgumentException>(() => _ = new TileMappingTable(tiles));
+        Assert.Throws<ArgumentOutOfRangeException>(() => _ = CreateTable(tiles));
     }
 
     [Test]
@@ -108,18 +128,18 @@ public sealed class TileMappingTableTests
         ];
 
         // 默认体积是 (2, 2, 1)，所以上面两张 Tile 会在 (1, 1, 0) 发生重叠。
-        Assert.Throws<InvalidOperationException>(() => _ = new TileMappingTable(tiles));
+        Assert.Throws<InvalidOperationException>(() => _ = CreateTable(tiles));
     }
 
     [Test]
     public void QueryMethods_OutOfRange_Throws()
     {
-        var table = new TileMappingTable(
+        var table = CreateTable(
         [
             CreateTile(index: 0, suit: 1, position: (0, 0, 0).PackXyz())
         ]);
 
-        Assert.Throws<ArgumentOutOfRangeException>(() => table.GetTileIndexAt(99, 0, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => table.GetTileIndexAtPosition((99, 0, 0).PackXyz()));
     }
 
     private static Tile CreateTile(int index, int suit, int position)
@@ -127,5 +147,28 @@ public sealed class TileMappingTableTests
         var tile = new Tile(index, position);
         tile.SetSuit(suit);
         return tile;
+    }
+
+    private static TileMappingTable CreateTable(IReadOnlyList<Tile> tiles)
+    {
+        var maxCol = 0;
+        var maxRow = 0;
+        var maxLayer = 0;
+        var (dX, dY, dZ) = Tile.DefaultVolume.UnpackXyz();
+
+        foreach (var tile in tiles)
+        {
+            var (x, y, z) = tile.Position.UnpackXyz();
+            maxCol = Math.Max(maxCol, x + dX);
+            maxRow = Math.Max(maxRow, y + dY);
+            maxLayer = Math.Max(maxLayer, z + dZ);
+        }
+
+        return TileMappingTable.Create(
+            tiles,
+            LockRuleTypeEnum.Tile,
+            maxCol,
+            maxRow,
+            maxLayer);
     }
 }

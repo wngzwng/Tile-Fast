@@ -1,6 +1,7 @@
 using Tile.Core.Common.BitSet;
 using Tile.Core.Core.Mapping;
 using Tile.Core.Core.Types;
+using Tile.Core.ExtensionTools;
 
 namespace Tile.Core.Core.Zones;
 
@@ -69,9 +70,77 @@ public sealed class Pasture
         RefreshAfterRemove(tileIndex);
     }
 
+    public void Add(int tileIndex)
+    {
+        ValidateTileIndex(tileIndex);
+
+        if (IsPresent(tileIndex))
+            throw new InvalidOperationException($"Tile {tileIndex} is already present.");
+
+        BitSetOperations.Set(_present, tileIndex);
+        RefreshAfterRemove(tileIndex);
+    }
+
     private void RefreshAfterRemove(int tileIndex)
     {
         // 根据 _lockRule、_mapping、_present 刷新 visible / selectable。
+        // 获取该棋子受影响的棋子
+        Span<ulong> affectedTileBits = stackalloc ulong[_mapping.WordCount];
+        _mapping.GetAffectedTileBits(tileIndex).CopyTo(affectedTileBits);
+        // 只要目前在盘面的棋子
+        affectedTileBits.AndWith(_present);
+
+        // 受影响的棋子排除可选和可见，重新评估
+        _selectable.AsSpan().AndNotWith(affectedTileBits);
+        _visible.AsSpan().AndNotWith(affectedTileBits);
+
+
+        foreach (int affectdTileIndex in TileIndexSet.Wrap(affectedTileBits))
+        {
+            var exposeArea = GetExposedArea(affectdTileIndex);
+            switch (exposeArea)
+            {
+                case 0: break;
+                case > 0 and < 4: BitSetOperations.Set(_visible, tileIndex); break;
+                case 4: BitSetOperations.Set(_selectable, tileIndex); break;
+                default: break;
+            }
+        }
+    }
+
+
+    private int GetExposedArea(int tileIndex)
+    {
+        // 收集上方依赖的棋子
+        var tile = _mapping.GetTile(tileIndex);
+        var (x, y, z) = tile.Position.UnpackXyz();
+        var topZ = tile.TopZ;
+        Span<int> positons = stackalloc int[]
+        {
+            (x + 0, y + 0, topZ).PackXyz(),
+            (x + 1, y + 0, topZ).PackXyz(),
+            (x + 0, y + 1, topZ).PackXyz(),
+            (x + 1, y + 1, topZ).PackXyz(),
+        };
+
+        var exposeArea = 0;
+        foreach(int position in positons)
+        {
+            for(int layer = topZ + 1; layer < _mapping.MaxLayer; layer++)
+            {
+                var nextPositon = position.WithZ(layer);
+
+                if (_mapping.TryGetTileIndexAtPosition(nextPositon, out int nextTileIndex)
+                && IsPresent(nextTileIndex)
+                )
+                {
+                    exposeArea += 1;
+                    break;
+                }
+            }
+            
+        }
+        return exposeArea;
     }
 
     private void Initialize()
