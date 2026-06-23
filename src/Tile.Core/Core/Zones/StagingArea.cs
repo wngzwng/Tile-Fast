@@ -1,144 +1,249 @@
+using Tile.Core.Common.BitSet;
 using Tile.Core.Core.Mapping;
 
 namespace Tile.Core.Core.Zones;
+
+/// <summary>
+/// 卡槽区，维护进入卡槽的棋子顺序、花色集合和花色数量。
+/// </summary>
 public sealed class StagingArea
 {
     private readonly TileMappingTable _mapping;
-
     private readonly int _matchRequireCount;
-    private readonly int _capacity;
 
-    private readonly int[] _tiles;
+    private int[] _tiles;
+    private readonly byte[] _suitCounts;
     private int _count;
-    private readonly int[] _orderSuits;
-    private int _orderSuitIndex;
+    private ulong _suitBits;
 
-    public int MatchRequireCount => _matchRequireCount;
+    /// <summary>
+    /// 卡槽总容量。
+    /// </summary>
+    public int Capacity => _tiles.Length;
 
-    public int Capacity => _capacity;
+    /// <summary>
+    /// 当前已使用的卡槽数量。
+    /// </summary>
+    public int UsedCapacity => _count;
 
-    public int Count => _count;
+    /// <summary>
+    /// 当前剩余可用卡槽数量。
+    /// </summary>
+    public int AvailableCapacity => Capacity - UsedCapacity;
 
-    public int AvailableCapacity => _capacity - _count;
+    /// <summary>
+    /// 当前卡槽是否已满。
+    /// </summary>
+    public bool IsFull => UsedCapacity >= Capacity;
 
-    public bool IsFull => _count >= _capacity;
+    /// <summary>
+    /// 当前卡槽是否为空。
+    /// </summary>
+    public bool IsEmpty => UsedCapacity == 0;
 
-    public bool IsEmpty => _count == 0;
+    /// <summary>
+    /// 当前卡槽已有花色集合，使用 suit 作为 bit 下标。
+    /// </summary>
+    public ulong SuitBits => _suitBits;
 
-    public ReadOnlySpan<int> Tiles => _tiles.AsSpan(0, _count);
+    /// <summary>
+    /// 当前卡槽内的棋子顺序。
+    /// </summary>
+    public ReadOnlySpan<int> Tiles => _tiles.AsSpan(0, UsedCapacity);
 
+    /// <summary>
+    /// 创建卡槽区。
+    /// </summary>
     public StagingArea(
         TileMappingTable mapping,
-        LevelRuleSpec ruleSpec)
+        int matchRequireCount,
+        int capacity)
     {
         _mapping = mapping ?? throw new ArgumentNullException(nameof(mapping));
 
-        if (ruleSpec is null)
-            throw new ArgumentNullException(nameof(ruleSpec));
+        if (matchRequireCount < 2)
+            throw new ArgumentOutOfRangeException(
+                nameof(matchRequireCount),
+                "匹配所需数量不能小于 2。");
 
-        _matchRequireCount = ruleSpec.MatchRequireCount;
-        _capacity = ruleSpec.SlotCapacity;
+        if (capacity < matchRequireCount)
+            throw new ArgumentOutOfRangeException(
+                nameof(capacity),
+                "卡槽容量不能小于匹配所需数量。");
 
-        _tiles = new int[_capacity];
-        _orderSuits = new int[_capacity];
+        _matchRequireCount = matchRequireCount;
+
+        _tiles = new int[capacity];
+        _suitCounts = new byte[Tile.MaxSuitCount];
     }
 
-    public void Add(int tileIndex)
+    /// <summary>
+    /// 调整卡槽容量；不能小于当前已使用容量。
+    /// </summary>
+    public void SetCapacity(int capacity)
+    {
+        if (capacity < _count)
+            throw new ArgumentOutOfRangeException(
+                nameof(capacity),
+                "卡槽容量不能小于当前已使用容量。");
+
+        if (capacity == Capacity)
+            return;
+
+        Array.Resize(ref _tiles, capacity);
+    }
+
+    /// <summary>
+    /// 清空卡槽状态，容量保持不变。
+    /// </summary>
+    public void Reset()
+    {
+        _tiles.AsSpan(0, _count).Clear();
+        _suitCounts.AsSpan().Clear();
+        _count = 0;
+        _suitBits = 0UL;
+    }
+
+    /// <summary>
+    /// 使棋子进入卡槽；同花色棋子会插入到同花色组末尾。
+    /// </summary>
+    public void Enter(int tileIndex)
     {
         ValidateTileIndex(tileIndex);
 
         if (IsFull)
-            throw new InvalidOperationException("Staging area is full.");
+            throw new InvalidOperationException("卡槽已满，无法添加棋子。");
 
-        _tiles[_count++] = tileIndex;
-        
         var suit = _mapping.GetSuit(tileIndex);
-        if (_orderSuits.AsSpan(0, _orderSuitIndex + 1).Contains(suit))
-           return;
-        
-        _orderSuits[_orderSuitIndex++] = suit;
+        var insertIndex = FindInsertIndexBySuit(suit);
+
+        InsertAt(insertIndex, tileIndex);
+        AddSuit(suit);
     }
 
-    public void Remove(int tileIndex)
+    /// <summary>
+    /// 使指定棋子离开卡槽。
+    /// </summary>
+    public void Leave(int tileIndex)
     {
         ValidateTileIndex(tileIndex);
 
         var index = Array.IndexOf(_tiles, tileIndex, 0, _count);
         if (index < 0)
-            throw new InvalidOperationException($"Tile {tileIndex} is not in staging area.");
+            throw new InvalidOperationException($"棋子 {tileIndex} 不在卡槽中。");
 
-        // 将 index 之后的元素前移一位
-        Array.Copy(_tiles, index + 1, _tiles, index, _count - index - 1);
-        _count--;
-
-        // 获取对应花色，组内无对应花色其他棋子，移除此花色
-        var suit = _mapping.GetSuit(tileIndex);
-        var hasSameSuit = false;
-        for (var i = 0; i < _count; i++)
-        {
-            if (_mapping.GetSuit(_tiles[i]) == suit)
-            {
-                hasSameSuit = true;
-                break;
-            }
-        }   
-        if (hasSameSuit)
-            return;
-
-        var suitIndex = Array.IndexOf(_orderSuits, suit, 0, _orderSuitIndex);
-        if (suitIndex < 0)
-            return;
-
-        // 将 suitIndex 之后的元素前移一位
-        Array.Copy(_orderSuits, suitIndex + 1, _orderSuits, suitIndex, _orderSuitIndex - suitIndex - 1);
-        _orderSuitIndex--;
+        RemoveAt(index);
+        RemoveSuit(_mapping.GetSuit(tileIndex));
     }
 
-    public int GetSuitCount(int suit)
+    /// <summary>
+    /// 移除指定花色的全部棋子，并返回被移除的棋子集合。
+    /// </summary>
+    public int[] RemoveSuitGroup(int suit)
     {
-        var count = 0;
+        var removedTileIds = GetSuitTiles(suit);
+        if (removedTileIds.Length == 0)
+            return removedTileIds;
 
-        for (var i = 0; i < _count; i++)
-        {
-            if (_mapping.GetSuit(_tiles[i]) == suit)
-                count++;
-        }
-
-        return count;
-    }
-
-    public bool CanMatch(int suit)
-    {
-        return GetSuitCount(suit) >= _matchRequireCount;
-    }
-
-    public bool TryMatch(int suit, out int[] matchedTileIds)
-    {
-        matchedTileIds = null;
-
-        if (!CanMatch(suit))
-            return false;
-
-        // 收集对应花色的棋子
-        int[] sameSuitTiles = new int[_matchRequireCount];
-    
         var write = 0;
         for (var read = 0; read < _count; read++)
         {
             var tileIndex = _tiles[read];
-
-            if (_mapping.GetSuit(tileIndex) == suit)
-                sameSuitTiles[write++] = tileIndex;
+            if (_mapping.GetSuit(tileIndex) != suit)
+                _tiles[write++] = tileIndex;
         }
 
-        // 移除对应花色的棋子   
-        for (var i = 0; i < _matchRequireCount; i++)
+        _count = write;
+        _suitBits &= ~(1UL << suit);
+        _suitCounts[suit] = 0;
+
+        return removedTileIds;
+    }
+
+    /// <summary>
+    /// 获取指定花色在卡槽中的棋子数量。
+    /// </summary>
+    public int GetSuitCount(int suit)
+    {
+        ValidateSuit(suit);
+        return _suitCounts[suit];
+    }
+
+    /// <summary>
+    /// 获取指定花色在卡槽中的棋子集合，顺序与卡槽内顺序一致。
+    /// </summary>
+    public int[] GetSuitTiles(int suit)
+    {
+        ValidateSuit(suit);
+
+        var suitTiles = new int[_suitCounts[suit]];
+        var write = 0;
+
+        for (var read = 0; read < _count; read++)
         {
-            Remove(sameSuitTiles[i]);
+            var tileIndex = _tiles[read];
+            if (_mapping.GetSuit(tileIndex) == suit)
+                suitTiles[write++] = tileIndex;
         }
-        matchedTileIds = sameSuitTiles;
+
+        return suitTiles;
+    }
+
+    /// <summary>
+    /// 将指定花色的棋子集合写入调用方提供的 bit 缓冲区。
+    /// </summary>
+    /// <returns>指定花色的棋子数量。</returns>
+    public int GetSuitTileBits(int suit, Span<ulong> tileBits)
+    {
+        ValidateSuit(suit);
+
+        if (tileBits.Length < _mapping.WordCount)
+            throw new ArgumentException("棋子 bit 缓冲区长度不足。", nameof(tileBits));
+
+        // 调用方复用缓冲区，因此这里先清空，保证输出确定。
+        tileBits.Clear();
+
+        if ((_suitBits & (1UL << suit)) == 0)
+            return 0;
+
+        var resultBits = tileBits[.._mapping.WordCount];
+        for (var i = 0; i < _count; i++)
+        {
+            var tileIndex = _tiles[i];
+            if (_mapping.GetSuit(tileIndex) == suit)
+                BitSetOperations.Set(resultBits, tileIndex);
+        }
+
+        return _suitCounts[suit];
+    }
+
+    /// <summary>
+    /// 如果指定花色满足匹配数量，则从卡槽移除该花色组。
+    /// </summary>
+    public bool TryMatch(int suit, out int[] matchedTileIds)
+    {
+        matchedTileIds = [];
+
+        if (GetSuitCount(suit) < _matchRequireCount)
+            return false;
+
+        matchedTileIds = RemoveSuitGroup(suit);
 
         return true;
+    }
+
+    /// <summary>
+    /// 创建当前卡槽状态的独立副本。
+    /// </summary>
+    public StagingArea Clone()
+    {
+        return new StagingArea(
+            _mapping,
+            _matchRequireCount,
+            (int[])_tiles.Clone(),
+            _count,
+            _suitBits,
+            (byte[])_suitCounts.Clone());
     }
 
     private void ValidateTileIndex(int tileIndex)
@@ -147,27 +252,66 @@ public sealed class StagingArea
             throw new ArgumentOutOfRangeException(nameof(tileIndex));
     }
 
+    private static void ValidateSuit(int suit)
+    {
+        if ((uint)suit >= Tile.MaxSuitCount)
+            throw new ArgumentOutOfRangeException(nameof(suit));
+    }
+
+    private int FindInsertIndexBySuit(int suit)
+    {
+        // 同花色棋子保持成组；新花色追加到末尾。
+        for (var i = _count - 1; i >= 0; i--)
+        {
+            if (_mapping.GetSuit(_tiles[i]) == suit)
+                return i + 1;
+        }
+
+        return _count;
+    }
+
+    private void InsertAt(int index, int tileIndex)
+    {
+        Array.Copy(_tiles, index, _tiles, index + 1, _count - index);
+        _tiles[index] = tileIndex;
+        _count++;
+    }
+
+    private void RemoveAt(int index)
+    {
+        Array.Copy(_tiles, index + 1, _tiles, index, _count - index - 1);
+        _count--;
+    }
+
+    private void AddSuit(int suit)
+    {
+        if (_suitCounts[suit] == 0)
+            _suitBits |= 1UL << suit;
+
+        _suitCounts[suit]++;
+    }
+
+    private void RemoveSuit(int suit)
+    {
+        _suitCounts[suit]--;
+
+        if (_suitCounts[suit] == 0)
+            _suitBits &= ~(1UL << suit);
+    }
+
     private StagingArea(
         TileMappingTable mapping,
         int matchRequireCount,
-        int capacity,
         int[] tiles,
-        int count)
+        int count,
+        ulong suitBits,
+        byte[] suitCounts)
     {
         _mapping = mapping ?? throw new ArgumentNullException(nameof(mapping));
         _matchRequireCount = matchRequireCount;
-        _capacity = capacity;
         _tiles = tiles ?? throw new ArgumentNullException(nameof(tiles));
         _count = count;
-    }
-
-    public StagingArea Clone()
-    {
-        return new StagingArea(
-            _mapping,
-            _matchRequireCount,
-            _capacity,
-            (int[])_tiles.Clone(),
-            _count);
+        _suitBits = suitBits;
+        _suitCounts = suitCounts ?? throw new ArgumentNullException(nameof(suitCounts));
     }
 }

@@ -58,7 +58,7 @@ public sealed class Pasture
         return BitSetOperations.Get(_selectable, tileIndex);
     }
 
-    public void Remove(int tileIndex)
+    public void Lift(int tileIndex)
     {
         ValidateTileIndex(tileIndex);
 
@@ -70,7 +70,7 @@ public sealed class Pasture
         RefreshAfterRemove(tileIndex);
     }
 
-    public void Add(int tileIndex)
+    public void Place(int tileIndex)
     {
         ValidateTileIndex(tileIndex);
 

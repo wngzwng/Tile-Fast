@@ -59,7 +59,10 @@ public sealed class LevelCore
             maxRow,
             maxLayer);
         Pasture = new Pasture(Mapping, RuleSpec);
-        StagingArea = new StagingArea(Mapping, RuleSpec);
+        StagingArea = new StagingArea(
+            Mapping,
+            RuleSpec.MatchRequireCount,
+            RuleSpec.SlotCapacity);
         Corral = new Corral(Mapping.TileCount);
         _historyMoves = new Move[Mapping.TileCount];
     }
@@ -134,7 +137,7 @@ public sealed class LevelCore
                $"Size={Mapping.MaxCol}x{Mapping.MaxRow}x{Mapping.MaxLayer}, " +
                $"Rule=match{RuleSpec.MatchRequireCount}/slot{RuleSpec.SlotCapacity}/{RuleSpec.LockRuleType}, " +
                $"Pasture={Pasture.PresentTiles.Count()} present, {Pasture.VisibleTiles.Count()} visible, {Pasture.SelectableTiles.Count()} selectable, " +
-               $"Staging={StagingArea.Count}/{StagingArea.Capacity}, " +
+               $"Staging={StagingArea.UsedCapacity}/{StagingArea.Capacity}, " +
                $"Corral={Corral.Count})";
     }
 }

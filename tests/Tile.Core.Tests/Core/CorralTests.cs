@@ -1,0 +1,124 @@
+using NUnit.Framework;
+using Tile.Core.Core.Zones;
+
+namespace Tile.Core.Tests.Core;
+
+public sealed class CorralTests
+{
+    [Test]
+    public void PushPopAndPeek_FollowLifoOrder()
+    {
+        var corral = new Corral(capacity: 3);
+
+        corral.Push(10);
+        corral.Push(20);
+
+        Assert.That(corral.Count, Is.EqualTo(2));
+        Assert.That(corral.Peek(), Is.EqualTo(20));
+        Assert.That(corral.Pop(), Is.EqualTo(20));
+        Assert.That(corral.Pop(), Is.EqualTo(10));
+        Assert.That(corral.IsEmpty, Is.True);
+    }
+
+    [Test]
+    public void PopMany_WritesPoppedTilesInLifoOrder()
+    {
+        var corral = new Corral(capacity: 4);
+        Span<int> buffer = stackalloc int[2];
+
+        corral.Push(1);
+        corral.Push(2);
+        corral.Push(3);
+
+        var count = corral.PopMany(2, buffer);
+
+        Assert.That(count, Is.EqualTo(2));
+        Assert.That(buffer.ToArray(), Is.EqualTo(new[] { 3, 2 }));
+        Assert.That(corral.Count, Is.EqualTo(1));
+        Assert.That(corral.Peek(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void DropMany_RemovesTailWithoutReturningTiles()
+    {
+        var corral = new Corral(capacity: 4);
+
+        corral.Push(1);
+        corral.Push(2);
+        corral.Push(3);
+
+        corral.DropMany(2);
+
+        Assert.That(corral.Count, Is.EqualTo(1));
+        Assert.That(corral.Peek(), Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Reset_ClearsStack()
+    {
+        var corral = new Corral(capacity: 2);
+
+        corral.Push(1);
+        corral.Push(2);
+
+        corral.Reset();
+
+        Assert.That(corral.Count, Is.Zero);
+        Assert.That(corral.IsEmpty, Is.True);
+    }
+
+    [Test]
+    public void Clone_CopiesStateIndependently()
+    {
+        var corral = new Corral(capacity: 3);
+        corral.Push(1);
+        corral.Push(2);
+
+        var clone = corral.Clone();
+
+        Assert.That(clone.Pop(), Is.EqualTo(2));
+        Assert.That(corral.Pop(), Is.EqualTo(2));
+        Assert.That(corral.Count, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Push_WhenFull_Throws()
+    {
+        var corral = new Corral(capacity: 1);
+
+        corral.Push(1);
+
+        Assert.Throws<InvalidOperationException>(() => corral.Push(2));
+    }
+
+    [Test]
+    public void PopAndPeek_WhenEmpty_Throw()
+    {
+        var corral = new Corral(capacity: 1);
+
+        Assert.Throws<InvalidOperationException>(() => corral.Pop());
+        Assert.Throws<InvalidOperationException>(() => corral.Peek());
+    }
+
+    [Test]
+    public void PopMany_WhenBufferTooSmall_Throws()
+    {
+        var corral = new Corral(capacity: 2);
+        int[] buffer = new int[1];
+
+        corral.Push(1);
+        corral.Push(2);
+
+        Assert.Throws<ArgumentException>(() => corral.PopMany(2, buffer));
+    }
+
+    [Test]
+    public void DropMany_WhenCountExceedsStack_Throws()
+    {
+        var corral = new Corral(capacity: 1);
+
+        corral.Push(1);
+
+        Assert.Throws<InvalidOperationException>(() => corral.DropMany(2));
+    }
+}

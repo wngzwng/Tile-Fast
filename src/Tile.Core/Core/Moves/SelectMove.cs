@@ -21,8 +21,8 @@ public class SelectMove : Move
         _matchedTileIds = null;
 
 
-        level.Pasture.Remove(TileIndex);
-        level.StagingArea.Add(TileIndex);
+        level.Pasture.Lift(TileIndex);
+        level.StagingArea.Enter(TileIndex);
 
         int suit = level.Mapping.GetSuit(TileIndex);
         if (level.StagingArea.TryMatch(suit, out var matchedTileIds))
@@ -34,7 +34,7 @@ public class SelectMove : Move
             // 卡槽中消除的部分进入 corral
             for (int i = 0; i < matchedTileIds.Length; i++)
             {
-                level.Corral.Add(matchedTileIds[i]);
+                level.Corral.Push(matchedTileIds[i]);
             }
         }
 
@@ -42,21 +42,21 @@ public class SelectMove : Move
 
     public override void Undo(LevelCore level)
     {
-        if(_matched)
+        if(_matched && _matchedTileIds is not null)
         {
             // corrl 倒出几位
-            level.Corral.Remove(_matchedTileIds.Length + 1);
+            level.Corral.DropMany(_matchedTileIds.Length);
 
             for (int i = 0; i < _matchedTileIds.Length; i++)
             {
-                level.StagingArea.Add(_matchedTileIds[i]);    
+                level.StagingArea.Enter(_matchedTileIds[i]);    
             }
           
             _matched = false;
             _matchedTileIds = null;
         }
 
-        level.StagingArea.Remove(TileIndex);
-        level.Pasture.Add(TileIndex);
+        level.StagingArea.Leave(TileIndex);
+        level.Pasture.Place(TileIndex);
     }
 }
