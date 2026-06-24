@@ -23,32 +23,17 @@ public sealed class TileMappingTableTests
     }
 
     [Test]
-    public void GetCoordinatesByTileIndex_ReturnsExpandedFootprint()
+    public void TileOccupiesPosition_ReturnsExpandedFootprint()
     {
         var tile = CreateTile(index: 0, suit: 1, position: (1, 2, 3).PackXyz());
         var table = CreateTable([tile]);
 
-        // 默认体积是 (2, 2, 1)，所以应展开为四个平面坐标。
-        var regionIds = table.GetOccupiedRegionIds(0);
-        var coordinates = new int[regionIds.Length];
-
-        for (var i = 0; i < regionIds.Length; i++)
-        {
-            var regionId = regionIds[i];
-            coordinates[i] = table.GetPosition(0)
-                .WithX(regionId % table.MaxCol)
-                .WithY((regionId / table.MaxCol) % table.MaxRow)
-                .WithZ(regionId / (table.MaxCol * table.MaxRow));
-        }
-
-        Assert.That(coordinates.Length, Is.EqualTo(4));
-        Assert.That(coordinates, Is.EqualTo(new[]
-        {
-            (1, 2, 3).PackXyz(),
-            (2, 2, 3).PackXyz(),
-            (1, 3, 3).PackXyz(),
-            (2, 3, 3).PackXyz()
-        }));
+        // 默认体积是 (2, 2, 1)，所以应占据四个平面坐标。
+        Assert.That(table.TileOccupiesPosition(0, (1, 2, 3).PackXyz()), Is.True);
+        Assert.That(table.TileOccupiesPosition(0, (2, 2, 3).PackXyz()), Is.True);
+        Assert.That(table.TileOccupiesPosition(0, (1, 3, 3).PackXyz()), Is.True);
+        Assert.That(table.TileOccupiesPosition(0, (2, 3, 3).PackXyz()), Is.True);
+        Assert.That(table.TileOccupiesPosition(0, (0, 0, 0).PackXyz()), Is.False);
     }
 
     [Test]

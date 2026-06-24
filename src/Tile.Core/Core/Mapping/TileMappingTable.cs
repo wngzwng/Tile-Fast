@@ -1,4 +1,3 @@
-
 using System.Numerics;
 using Tile.Core.Common.BitSet;
 using Tile.Core.Core.Types;
@@ -12,6 +11,8 @@ namespace Tile.Core.Core.Mapping;
 /// </summary>
 public sealed class TileMappingTable
 {
+    #region Fields
+
     private readonly Tile[] _tiles;
 
     // tileIndex -> suit
@@ -25,8 +26,7 @@ public sealed class TileMappingTable
     // 长度 = OccupiedRegionCountPerTile
     private readonly int[] _occupiedRegionIdsByTileIndexFlat;
 
-    // regionId -> tileIndex
-    // 未被占用时为 -1
+    // regionId -> tileIndex，未被占用时为 -1
     private readonly int[] _tileIndexByRegionId;
 
     // suit -> tile bitset
@@ -43,6 +43,10 @@ public sealed class TileMappingTable
     private readonly ulong _suitBits;
 
     private readonly RegionIdMapper _regionIdMapper;
+
+    #endregion
+
+    #region Basic Properties
 
     public int TileCount => _tiles.Length;
 
@@ -84,6 +88,10 @@ public sealed class TileMappingTable
     public int MaxLayer => _regionIdMapper.MaxLayer;
 
     public LockRuleTypeEnum LockRule { get; }
+
+    #endregion
+
+    #region Construction
 
     private TileMappingTable(
         Tile[] tiles,
@@ -136,7 +144,6 @@ public sealed class TileMappingTable
             TileBounds.Default.CountRegions();
 
         var tileArray = new Tile[tileCount];
-
         var suitByTileIndex = new int[tileCount];
         var positionByTileIndex = new int[tileCount];
 
@@ -154,7 +161,352 @@ public sealed class TileMappingTable
         var affectedTileBitsByTileIndexFlat =
             new ulong[tileCount * wordCount];
 
+        var suitBits = BuildTileFacts(
+            tiles,
+            tileArray,
+            suitByTileIndex,
+            positionByTileIndex,
+            tileBitsBySuitFlat,
+            wordCount);
+
+        ValidateContinuousTileIndexes(tileArray);
+
+        BuildOccupiedRegionIds(
+            tileArray,
+            regionIdMapper,
+            occupiedRegionCountPerTile,
+            occupiedRegionIdsByTileIndexFlat,
+            tileIndexByRegionId);
+
+        var mapping = new TileMappingTable(
+            tileArray,
+            lockRule,
+            wordCount,
+            occupiedRegionCountPerTile,
+            regionIdMapper,
+            suitByTileIndex,
+            positionByTileIndex,
+            occupiedRegionIdsByTileIndexFlat,
+            tileIndexByRegionId,
+            tileBitsBySuitFlat,
+            affectedTileBitsByTileIndexFlat,
+            suitBits);
+
+        mapping.BuildAffectedTileBits(
+            tileArray,
+            lockRule,
+            wordCount,
+            affectedTileBitsByTileIndexFlat);
+
+        return mapping;
+    }
+
+    #endregion
+
+    #region Tile Facts
+
+    public Tile GetTile(int tileIndex)
+    {
+        ValidateTileIndex(tileIndex);
+        return _tiles[tileIndex];
+    }
+
+    public int GetSuit(int tileIndex)
+    {
+        ValidateTileIndex(tileIndex);
+        return _suitByTileIndex[tileIndex];
+    }
+
+    public int GetPosition(int tileIndex)
+    {
+        ValidateTileIndex(tileIndex);
+        return _positionByTileIndex[tileIndex];
+    }
+
+    #endregion
+
+    #region Suit Queries
+
+    public bool HasSuit(int suit)
+    {
+        if ((uint)suit >= Tile.MaxSuitCount)
+            return false;
+
+        return (_suitBits & (1UL << suit)) != 0;
+    }
+
+    public ReadOnlySpan<ulong> GetTileBitsBySuit(int suit)
+    {
+        ValidateSuit(suit);
+
+        if (!HasSuit(suit))
+            return ReadOnlySpan<ulong>.Empty;
+
+        return _tileBitsBySuitFlat.AsSpan(
+            suit * WordCount,
+            WordCount);
+    }
+
+    public TileIndexSet GetTileIndexSetBySuit(int suit)
+    {
+        return TileIndexSet.Wrap(GetTileBitsBySuit(suit));
+    }
+
+    public IEnumerable<int> EnumerateSuits()
+    {
+        var bits = _suitBits;
+
+        while (bits != 0)
+        {
+            var suit = BitOperations.TrailingZeroCount(bits);
+            yield return suit;
+
+            bits &= bits - 1;
+        }
+    }
+
+    #endregion
+
+    #region Position Queries
+
+    public bool TryGetTileIndexAtPosition(
+        int position,
+        out int tileIndex)
+    {
+        var regionId = _regionIdMapper.ToRegionId(position);
+        return TryGetTileIndexAtRegionId(regionId, out tileIndex);
+    }
+
+    public int GetTileIndexAtPosition(int position)
+    {
+        var regionId = _regionIdMapper.ToRegionId(position);
+        return GetTileIndexAtRegionId(regionId);
+    }
+
+    #endregion
+
+    #region Occupancy Queries
+
+    public bool TileOccupiesPosition(int tileIndex, int position)
+    {
+        var regionId = _regionIdMapper.ToRegionId(position);
+        return TileOccupiesRegionId(tileIndex, regionId);
+    }
+
+    #endregion
+
+    #region Affected Tile Queries
+
+    public ReadOnlySpan<ulong> GetAffectedTileBits(int tileIndex)
+    {
+        ValidateTileIndex(tileIndex);
+
+        return _affectedTileBitsByTileIndexFlat.AsSpan(
+            tileIndex * WordCount,
+            WordCount);
+    }
+
+    public TileIndexSet GetAffectedTileIndexSet(int tileIndex)
+    {
+        return TileIndexSet.Wrap(GetAffectedTileBits(tileIndex));
+    }
+
+    #endregion
+
+    #region Neighbor Queries
+
+    // 预留：后续 TileMappingTable 只提供静态邻居候选。
+    // Pasture 负责基于 _present 过滤得到动态在场邻居。
+    public int GetNeighbors(
+        int tileIndex,
+        NeighborDirEnum dir,
+        Span<int> buffer)
+    {
+        ValidateTileIndex(tileIndex);
+        return GetNeighbors(_tiles[tileIndex], dir, buffer);
+    }
+
+    private int GetNeighbors(
+        Tile tile,
+        NeighborDirEnum dir,
+        Span<int> buffer)
+    {
+        if (buffer.Length < 4)
+            throw new ArgumentException("邻居缓冲区长度不足。", nameof(buffer));
+
+        var (x, y, z) = PositionPacker.UnpackXyz(tile.Position);
+        var (sizeX, sizeY, sizeZ) = Tile.DefaultVolume.UnpackXyz();
+
+        var count = 0;
+
+        switch (dir)
+        {
+            case NeighborDirEnum.Left:
+                TryAddNeighborAt(x - 1, y, z, tile.Index, buffer, ref count);
+                TryAddNeighborAt(x - 1, y + 1, z, tile.Index, buffer, ref count);
+                break;
+
+            case NeighborDirEnum.Right:
+                TryAddNeighborAt(x + sizeX, y, z, tile.Index, buffer, ref count);
+                TryAddNeighborAt(x + sizeX, y + 1, z, tile.Index, buffer, ref count);
+                break;
+
+            case NeighborDirEnum.Front:
+                TryAddNeighborAt(x, y - 1, z, tile.Index, buffer, ref count);
+                TryAddNeighborAt(x + 1, y - 1, z, tile.Index, buffer, ref count);
+                break;
+
+            case NeighborDirEnum.Back:
+                TryAddNeighborAt(x, y + sizeY, z, tile.Index, buffer, ref count);
+                TryAddNeighborAt(x + 1, y + sizeY, z, tile.Index, buffer, ref count);
+                break;
+
+            case NeighborDirEnum.Up:
+                TryAddNeighborAt(x, y, z + sizeZ, tile.Index, buffer, ref count);
+                TryAddNeighborAt(x + 1, y, z + sizeZ, tile.Index, buffer, ref count);
+                TryAddNeighborAt(x, y + 1, z + sizeZ, tile.Index, buffer, ref count);
+                TryAddNeighborAt(x + 1, y + 1, z + sizeZ, tile.Index, buffer, ref count);
+                break;
+
+            case NeighborDirEnum.Down:
+                TryAddNeighborAt(x, y, z - 1, tile.Index, buffer, ref count);
+                TryAddNeighborAt(x + 1, y, z - 1, tile.Index, buffer, ref count);
+                TryAddNeighborAt(x, y + 1, z - 1, tile.Index, buffer, ref count);
+                TryAddNeighborAt(x + 1, y + 1, z - 1, tile.Index, buffer, ref count);
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(dir), dir, "未知邻接方向。");
+        }
+
+        return count;
+    }
+
+    private void TryAddNeighborAt(
+        int x,
+        int y,
+        int z,
+        int sourceTileIndex,
+        Span<int> buffer,
+        ref int count)
+    {
+        if (!IsInsideBoard(x, y, z))
+            return;
+
+        var position = PositionPacker.PackXyz(x, y, z);
+
+        if (!TryGetTileIndexAtPosition(position, out var tileIndex))
+            return;
+
+        if (tileIndex == sourceTileIndex)
+            return;
+
+        if (Contains(buffer, count, tileIndex))
+            return;
+
+        buffer[count++] = tileIndex;
+    }
+
+    private bool IsInsideBoard(int x, int y, int z)
+    {
+        return x >= 0 && x < MaxCol
+            && y >= 0 && y < MaxRow
+            && z >= 0 && z < MaxLayer;
+    }
+
+    private static bool Contains(
+        ReadOnlySpan<int> buffer,
+        int count,
+        int tileIndex)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            if (buffer[i] == tileIndex)
+                return true;
+        }
+
+        return false;
+    }
+
+    #endregion
+
+    #region Internal Region Queries
+
+    private bool TryGetTileIndexAtRegionId(
+        int regionId,
+        out int tileIndex)
+    {
+        if ((uint)regionId >= (uint)_tileIndexByRegionId.Length)
+        {
+            tileIndex = -1;
+            return false;
+        }
+
+        tileIndex = _tileIndexByRegionId[regionId];
+        return tileIndex >= 0;
+    }
+
+    private int GetTileIndexAtRegionId(int regionId)
+    {
+        if (TryGetTileIndexAtRegionId(regionId, out var tileIndex))
+            return tileIndex;
+
+        throw new InvalidOperationException(
+            $"regionId 未被任何 Tile 占据：regionId={regionId}。");
+    }
+
+    private ReadOnlySpan<int> GetOccupiedRegionIds(int tileIndex)
+    {
+        ValidateTileIndex(tileIndex);
+
+        return _occupiedRegionIdsByTileIndexFlat.AsSpan(
+            tileIndex * OccupiedRegionCountPerTile,
+            OccupiedRegionCountPerTile);
+    }
+
+    private bool TileOccupiesRegionId(int tileIndex, int regionId)
+    {
+        var regionIds = GetOccupiedRegionIds(tileIndex);
+
+        foreach (var occupiedRegionId in regionIds)
+        {
+            if (occupiedRegionId == regionId)
+                return true;
+        }
+
+        return false;
+    }
+
+    #endregion
+
+    #region Validation
+
+    private void ValidateTileIndex(int tileIndex)
+    {
+        if ((uint)tileIndex >= (uint)_tiles.Length)
+            throw new ArgumentOutOfRangeException(nameof(tileIndex));
+    }
+
+    private static void ValidateSuit(int suit)
+    {
+        if ((uint)suit >= Tile.MaxSuitCount)
+            throw new ArgumentOutOfRangeException(nameof(suit));
+    }
+
+    #endregion
+
+    #region Build Helpers
+
+    private static ulong BuildTileFacts(
+        IReadOnlyList<Tile> tiles,
+        Tile[] tileArray,
+        int[] suitByTileIndex,
+        int[] positionByTileIndex,
+        ulong[] tileBitsBySuitFlat,
+        int wordCount)
+    {
         var suitBits = 0UL;
+        var tileCount = tiles.Count;
 
         for (var i = 0; i < tileCount; i++)
         {
@@ -205,202 +557,20 @@ public sealed class TileMappingTable
             BitSetOperations.Set(suitTileBits, tileIndex);
         }
 
+        return suitBits;
+    }
+
+    private static void ValidateContinuousTileIndexes(Tile[] tileArray)
+    {
         for (var tileIndex = 0; tileIndex < tileArray.Length; tileIndex++)
         {
             if (tileArray[tileIndex] is null)
             {
                 throw new ArgumentException(
                     $"tiles 缺少 Tile.Index={tileIndex} 的 Tile。Tile.Index 必须从 0 到 tileCount - 1 连续。",
-                    nameof(tiles));
+                    "tiles");
             }
         }
-
-        BuildOccupiedRegionIds(
-            tileArray,
-            regionIdMapper,
-            occupiedRegionCountPerTile,
-            occupiedRegionIdsByTileIndexFlat,
-            tileIndexByRegionId);
-
-        var mapping = new TileMappingTable(
-            tileArray,
-            lockRule,
-            wordCount,
-            occupiedRegionCountPerTile,
-            regionIdMapper,
-            suitByTileIndex,
-            positionByTileIndex,
-            occupiedRegionIdsByTileIndexFlat,
-            tileIndexByRegionId,
-            tileBitsBySuitFlat,
-            affectedTileBitsByTileIndexFlat,
-            suitBits);
-
-        mapping.BuildAffectedTileBits(
-            tileArray,
-            lockRule,
-            wordCount,
-            affectedTileBitsByTileIndexFlat);
-        
-        return mapping;
-        
-    }
-
-    public Tile GetTile(int tileIndex)
-    {
-        ValidateTileIndex(tileIndex);
-        return _tiles[tileIndex];
-    }
-
-    public int GetSuit(int tileIndex)
-    {
-        ValidateTileIndex(tileIndex);
-        return _suitByTileIndex[tileIndex];
-    }
-
-    public int GetPosition(int tileIndex)
-    {
-        ValidateTileIndex(tileIndex);
-        return _positionByTileIndex[tileIndex];
-    }
-
-    public bool HasSuit(int suit)
-    {
-        if ((uint)suit >= Tile.MaxSuitCount)
-            return false;
-
-        return (_suitBits & (1UL << suit)) != 0;
-    }
-
-    public ReadOnlySpan<ulong> GetTileBitsBySuit(int suit)
-    {
-        ValidateSuit(suit);
-
-        if (!HasSuit(suit))
-            return ReadOnlySpan<ulong>.Empty;
-
-        return _tileBitsBySuitFlat.AsSpan(
-            suit * WordCount,
-            WordCount);
-    }
-
-    public ReadOnlySpan<ulong> GetAffectedTileBits(int tileIndex)
-    {
-        ValidateTileIndex(tileIndex);
-
-        return _affectedTileBitsByTileIndexFlat.AsSpan(
-            tileIndex * WordCount,
-            WordCount);
-    }
-
-    public ReadOnlySpan<int> GetOccupiedRegionIds(int tileIndex)
-    {
-        ValidateTileIndex(tileIndex);
-
-        return _occupiedRegionIdsByTileIndexFlat.AsSpan(
-            tileIndex * OccupiedRegionCountPerTile,
-            OccupiedRegionCountPerTile);
-    }
-
-    public bool TryGetTileIndexAtRegionId(
-        int regionId,
-        out int tileIndex)
-    {
-        if ((uint)regionId >= (uint)_tileIndexByRegionId.Length)
-        {
-            tileIndex = -1;
-            return false;
-        }
-
-        tileIndex = _tileIndexByRegionId[regionId];
-        return tileIndex >= 0;
-    }
-
-    public int GetTileIndexAtRegionId(int regionId)
-    {
-        if (TryGetTileIndexAtRegionId(regionId, out var tileIndex))
-            return tileIndex;
-
-        throw new InvalidOperationException(
-            $"regionId 未被任何 Tile 占据：regionId={regionId}。");
-    }
-
-    public bool TryGetTileIndexAtPosition(
-        int position,
-        out int tileIndex)
-    {
-        var regionId = _regionIdMapper.ToRegionId(position);
-        return TryGetTileIndexAtRegionId(regionId, out tileIndex);
-    }
-
-    public int GetTileIndexAtPosition(int position)
-    {
-        var regionId = _regionIdMapper.ToRegionId(position);
-        return GetTileIndexAtRegionId(regionId);
-    }
-
-    public int ToRegionId(int position)
-    {
-        return _regionIdMapper.ToRegionId(position);
-    }
-
-    public int ToRegionId(int x, int y, int z)
-    {
-        return _regionIdMapper.ToRegionId(x, y, z);
-    }
-
-    public bool TileOccupiesRegionId(int tileIndex, int regionId)
-    {
-        var regionIds = GetOccupiedRegionIds(tileIndex);
-
-        foreach (var occupiedRegionId in regionIds)
-        {
-            if (occupiedRegionId == regionId)
-                return true;
-        }
-
-        return false;
-    }
-
-    public bool TileOccupiesPosition(int tileIndex, int position)
-    {
-        var regionId = _regionIdMapper.ToRegionId(position);
-        return TileOccupiesRegionId(tileIndex, regionId);
-    }
-
-    public IEnumerable<int> EnumerateSuits()
-    {
-        var bits = _suitBits;
-
-        while (bits != 0)
-        {
-            var suit = BitOperations.TrailingZeroCount(bits);
-            yield return suit;
-
-            bits &= bits - 1;
-        }
-    }
-
-    public TileIndexSet GetTileIndexSetBySuit(int suit)
-    {
-        return TileIndexSet.Wrap(GetTileBitsBySuit(suit));
-    }
-
-    public TileIndexSet GetAffectedTileIndexSet(int tileIndex)
-    {
-        return TileIndexSet.Wrap(GetAffectedTileBits(tileIndex));
-    }
-
-    private void ValidateTileIndex(int tileIndex)
-    {
-        if ((uint)tileIndex >= (uint)_tiles.Length)
-            throw new ArgumentOutOfRangeException(nameof(tileIndex));
-    }
-
-    private static void ValidateSuit(int suit)
-    {
-        if ((uint)suit >= Tile.MaxSuitCount)
-            throw new ArgumentOutOfRangeException(nameof(suit));
     }
 
     private static void BuildOccupiedRegionIds(
@@ -444,15 +614,15 @@ public sealed class TileMappingTable
             }
         }
     }
-    
-    private  void BuildAffectedTileBits(
+
+    private void BuildAffectedTileBits(
         Tile[] tiles,
         LockRuleTypeEnum lockRule,
         int wordCount,
         ulong[] affectedTileBitsByTileIndexFlat)
     {
-        
-        var boardBounds = PositionPacker.PackXyz(MaxCol, MaxRow, MaxLayer);
+        Span<int> neighbors = stackalloc int[4];
+
         foreach (var tile in tiles)
         {
             var affectedBits = affectedTileBitsByTileIndexFlat.AsSpan(
@@ -462,7 +632,7 @@ public sealed class TileMappingTable
             var (startX, startY, startZ) = PositionPacker.UnpackXyz(tile.Position);
 
             // ------------------------------------------------------------
-            // 1. 收集下方受影响的棋子
+            // 1. 收集下方受影响的棋子。
             //
             // 当前 Tile 默认覆盖 2x2 面：
             // (x,     y)
@@ -501,7 +671,7 @@ public sealed class TileMappingTable
             }
 
             // ------------------------------------------------------------
-            // 2. Classic 规则额外收集左右锁定相关棋子
+            // 2. Classic 规则额外收集左右锁定相关棋子。
             //
             // Tile 模式：
             // 只关心上下遮挡关系。
@@ -509,80 +679,37 @@ public sealed class TileMappingTable
             // Classic 模式：
             // 还要关心左右方向上的邻接棋子。
             //
-            // 当前 Tile 默认占用 2x2 面：
-            // 左侧边界：x
-            // 右侧边界：x + 1
-            //
-            // 因此：
-            // - 左侧检查 (x, y, z) 和 (x, y + 1, z) 的左邻居
-            // - 右侧检查 (x + 1, y, z) 和 (x + 1, y + 1, z) 的右邻居
+            // 这里只表达规则依赖：Classic 受左右静态邻居影响。
+            // 具体面坐标收集由 GetNeighbors 统一处理。
             // ------------------------------------------------------------
             if (lockRule == LockRuleTypeEnum.Classic)
             {
-                AddNeighborHit(
-                    NeighborDir.Left,
-                    PositionPacker.PackXyz(startX, startY, startZ),
-                    boardBounds,
+                var neighborCount = GetNeighbors(
+                    tile,
+                    NeighborDirEnum.Left,
+                    neighbors);
+
+                AddTileIndexesToBits(
+                    neighbors[..neighborCount],
                     affectedBits);
 
-                AddNeighborHit(
-                    NeighborDir.Left,
-                    PositionPacker.PackXyz(startX, startY + 1, startZ),
-                    boardBounds,
-                    affectedBits);
+                neighborCount = GetNeighbors(
+                    tile,
+                    NeighborDirEnum.Right,
+                    neighbors);
 
-                AddNeighborHit(
-                    NeighborDir.Right,
-                    PositionPacker.PackXyz(startX + 1, startY, startZ),
-                    boardBounds,
-                    affectedBits);
-
-                AddNeighborHit(
-                    NeighborDir.Right,
-                    PositionPacker.PackXyz(startX + 1, startY + 1, startZ),
-                    boardBounds,
+                AddTileIndexesToBits(
+                    neighbors[..neighborCount],
                     affectedBits);
             }
         }
-
-       
-
-        void AddNeighborHit(
-            NeighborDir dir,
-            int position,
-            int bounds,
-            Span<ulong> affectedBits)
-        {
-            var next = dir.Move(position, bounds, out var isOver);
-
-            if (isOver)
-                return;
-
-            if (TryGetTileIndexAtPosition(next, out var tileIndex))
-                BitSetOperations.Set(affectedBits, tileIndex);
-        }
     }
 
-    public void AddNeighborHit(
-            NeighborDir dir,
-            int position,
-            int bounds,
-            Span<ulong> affectedBits)
-        {
-            var next = dir.Move(position, bounds, out var isOver);
-
-            if (isOver)
-                return;
-
-            if (TryGetTileIndexAtPosition(next, out var tileIndex))
-                BitSetOperations.Set(affectedBits, tileIndex);
-        }
-
-     void AddFirstHitBelow(
-            int x,
-            int y,
-            int startZ,
-            Span<ulong> affectedBits)
+    private void AddFirstHitBelow(
+        int x,
+        int y,
+        int startZ,
+        Span<ulong> affectedBits)
     {
         for (var z = startZ - 1; z >= 0; z--)
         {
@@ -596,10 +723,19 @@ public sealed class TileMappingTable
         }
     }
 
-    
+    private static void AddTileIndexesToBits(
+        ReadOnlySpan<int> tileIndexes,
+        Span<ulong> bits)
+    {
+        foreach (var tileIndex in tileIndexes)
+        {
+            BitSetOperations.Set(bits, tileIndex);
+        }
+    }
 
+    #endregion
 
-
+    #region Geometry Helpers
 
     /// <summary>
     /// TileMappingTable 内部使用的 Tile 默认体积包围盒。
@@ -745,4 +881,6 @@ public sealed class TileMappingTable
                 && MaxZ >= other.MinZ;
         }
     }
+
+    #endregion
 }
