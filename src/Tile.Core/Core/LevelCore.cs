@@ -132,12 +132,37 @@ public sealed class LevelCore
 
     public override string ToString()
     {
+        return ToString(multiline: false);
+    }
+
+    public string ToString(bool multiline)
+    {
+        if (multiline)
+            return ToMultilineString();
+
+        return ToSingleLineString();
+    }
+
+    private string ToSingleLineString()
+    {
         return $"LevelCore(" +
                $"Tiles={Mapping.TileCount}, " +
-               $"Size={Mapping.MaxCol}x{Mapping.MaxRow}x{Mapping.MaxLayer}, " +
+               $"Size(rcz)={Mapping.MaxRow}x{Mapping.MaxCol}x{Mapping.MaxLayer}, " +
                $"Rule=match{RuleSpec.MatchRequireCount}/slot{RuleSpec.SlotCapacity}/{RuleSpec.LockRuleType}, " +
-               $"Pasture={Pasture.PresentTiles.Count()} present, {Pasture.VisibleTiles.Count()} visible, {Pasture.SelectableTiles.Count()} selectable, " +
-               $"Staging={StagingArea.UsedCapacity}/{StagingArea.Capacity}, " +
-               $"Corral={Corral.Count})";
+               $"Pasture={Pasture}, " +
+               $"StagingArea={StagingArea}, " +
+               $"Corral={Corral.ToString(RuleSpec.MatchRequireCount)})";
+    }
+
+    private string ToMultilineString()
+    {
+        return "LevelCore(\n" +
+               $"  Tiles={Mapping.TileCount},\n" +
+               $"  Size(rcz)={Mapping.MaxRow}x{Mapping.MaxCol}x{Mapping.MaxLayer},\n" +
+               $"  Rule=match{RuleSpec.MatchRequireCount}/slot{RuleSpec.SlotCapacity}/{RuleSpec.LockRuleType},\n" +
+               $"  Pasture={Pasture},\n" +
+               $"  StagingArea={StagingArea},\n" +
+               $"  Corral={Corral.ToString(RuleSpec.MatchRequireCount)}\n" +
+               ")";
     }
 }

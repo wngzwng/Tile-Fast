@@ -336,6 +336,41 @@ public sealed class Pasture
 
     #endregion
 
+    #region Formatting
+
+    /// <summary>
+    /// 返回 Pasture 当前状态摘要。
+    /// </summary>
+    public override string ToString()
+    {
+        return $"Pasture(" +
+               $"Tiles={_mapping.TileCount}, " +
+               $"Rule={_lockRule}, " +
+               $"Present={PresentTiles.Count()}, " +
+               $"Visible={VisibleTiles.Count()}, " +
+               $"Selectable={SelectableTiles.Count()}, " +
+               $"VisibleTiles=[{FormatTileIndexes(VisibleTiles)}], " +
+               $"SelectableTiles=[{FormatTileIndexes(SelectableTiles)}], " +
+               $"IsEmpty={IsEmpty})";
+    }
+
+    private static string FormatTileIndexes(TileIndexSet tileIndexes)
+    {
+        var text = string.Empty;
+
+        foreach (var tileIndex in tileIndexes)
+        {
+            if (text.Length > 0)
+                text += ", ";
+
+            text += tileIndex;
+        }
+
+        return text;
+    }
+
+    #endregion
+
     #region Clone
 
     /// <summary>

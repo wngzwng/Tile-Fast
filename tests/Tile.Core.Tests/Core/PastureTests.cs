@@ -9,6 +9,38 @@ namespace Tile.Core.Tests.Core;
 public sealed class PastureTests
 {
     [Test]
+    public void ToString_ContainsCurrentStateSummary()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (0, 0, 1).PackXyz())
+        ]);
+
+        var text = pasture.ToString();
+
+        Assert.That(text, Does.Contain("Pasture("));
+        Assert.That(text, Does.Contain("Tiles=2"));
+        Assert.That(text, Does.Contain("Rule=Tile"));
+        Assert.That(text, Does.Contain("Present=2"));
+        Assert.That(text, Does.Contain("Visible=1"));
+        Assert.That(text, Does.Contain("Selectable=1"));
+        Assert.That(text, Does.Contain("VisibleTiles=[1]"));
+        Assert.That(text, Does.Contain("SelectableTiles=[1]"));
+        Assert.That(text, Does.Contain("IsEmpty=False"));
+
+        pasture.Lift(1);
+
+        text = pasture.ToString();
+
+        Assert.That(text, Does.Contain("Present=1"));
+        Assert.That(text, Does.Contain("Visible=1"));
+        Assert.That(text, Does.Contain("Selectable=1"));
+        Assert.That(text, Does.Contain("VisibleTiles=[0]"));
+        Assert.That(text, Does.Contain("SelectableTiles=[0]"));
+    }
+
+    [Test]
     public void Constructor_MarksAllTilesPresent()
     {
         var pasture = CreatePasture(

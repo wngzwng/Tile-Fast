@@ -8,6 +8,8 @@ namespace Tile.Core.Core.Zones;
 /// </summary>
 public sealed class StagingArea
 {
+    #region Fields
+
     private readonly TileMappingTable _mapping;
     private readonly int _matchRequireCount;
 
@@ -15,6 +17,10 @@ public sealed class StagingArea
     private readonly byte[] _suitCounts;
     private int _count;
     private ulong _suitBits;
+
+    #endregion
+
+    #region Capacity Properties
 
     /// <summary>
     /// 卡槽总容量。
@@ -41,6 +47,10 @@ public sealed class StagingArea
     /// </summary>
     public bool IsEmpty => UsedCapacity == 0;
 
+    #endregion
+
+    #region State Properties
+
     /// <summary>
     /// 当前卡槽已有花色集合，使用 suit 作为 bit 下标。
     /// </summary>
@@ -50,6 +60,10 @@ public sealed class StagingArea
     /// 当前卡槽内的棋子顺序。
     /// </summary>
     public ReadOnlySpan<int> Tiles => _tiles.AsSpan(0, UsedCapacity);
+
+    #endregion
+
+    #region Construction
 
     /// <summary>
     /// 创建卡槽区。
@@ -77,6 +91,26 @@ public sealed class StagingArea
         _suitCounts = new byte[Tile.MaxSuitCount];
     }
 
+    private StagingArea(
+        TileMappingTable mapping,
+        int matchRequireCount,
+        int[] tiles,
+        int count,
+        ulong suitBits,
+        byte[] suitCounts)
+    {
+        _mapping = mapping ?? throw new ArgumentNullException(nameof(mapping));
+        _matchRequireCount = matchRequireCount;
+        _tiles = tiles ?? throw new ArgumentNullException(nameof(tiles));
+        _count = count;
+        _suitBits = suitBits;
+        _suitCounts = suitCounts ?? throw new ArgumentNullException(nameof(suitCounts));
+    }
+
+    #endregion
+
+    #region Capacity Actions
+
     /// <summary>
     /// 调整卡槽容量；不能小于当前已使用容量。
     /// </summary>
@@ -93,6 +127,10 @@ public sealed class StagingArea
         Array.Resize(ref _tiles, capacity);
     }
 
+    #endregion
+
+    #region State Actions
+
     /// <summary>
     /// 清空卡槽状态，容量保持不变。
     /// </summary>
@@ -103,6 +141,10 @@ public sealed class StagingArea
         _count = 0;
         _suitBits = 0UL;
     }
+
+    #endregion
+
+    #region Tile Actions
 
     /// <summary>
     /// 使棋子进入卡槽；同花色棋子会插入到同花色组末尾。
@@ -136,6 +178,10 @@ public sealed class StagingArea
         RemoveSuit(_mapping.GetSuit(tileIndex));
     }
 
+    #endregion
+
+    #region Suit Actions
+
     /// <summary>
     /// 移除指定花色的全部棋子，并返回被移除的棋子集合。
     /// </summary>
@@ -159,6 +205,10 @@ public sealed class StagingArea
 
         return removedTileIds;
     }
+
+    #endregion
+
+    #region Suit Queries
 
     /// <summary>
     /// 获取指定花色在卡槽中的棋子数量。
@@ -217,6 +267,10 @@ public sealed class StagingArea
         return _suitCounts[suit];
     }
 
+    #endregion
+
+    #region Matching
+
     /// <summary>
     /// 如果指定花色满足匹配数量，则从卡槽移除该花色组。
     /// </summary>
@@ -232,19 +286,9 @@ public sealed class StagingArea
         return true;
     }
 
-    /// <summary>
-    /// 创建当前卡槽状态的独立副本。
-    /// </summary>
-    public StagingArea Clone()
-    {
-        return new StagingArea(
-            _mapping,
-            _matchRequireCount,
-            (int[])_tiles.Clone(),
-            _count,
-            _suitBits,
-            (byte[])_suitCounts.Clone());
-    }
+    #endregion
+
+    #region Validation
 
     private void ValidateTileIndex(int tileIndex)
     {
@@ -257,6 +301,10 @@ public sealed class StagingArea
         if ((uint)suit >= Tile.MaxSuitCount)
             throw new ArgumentOutOfRangeException(nameof(suit));
     }
+
+    #endregion
+
+    #region Order Helpers
 
     private int FindInsertIndexBySuit(int suit)
     {
@@ -283,6 +331,10 @@ public sealed class StagingArea
         _count--;
     }
 
+    #endregion
+
+    #region Suit State Helpers
+
     private void AddSuit(int suit)
     {
         if (_suitCounts[suit] == 0)
@@ -299,19 +351,79 @@ public sealed class StagingArea
             _suitBits &= ~(1UL << suit);
     }
 
-    private StagingArea(
-        TileMappingTable mapping,
-        int matchRequireCount,
-        int[] tiles,
-        int count,
-        ulong suitBits,
-        byte[] suitCounts)
+    #endregion
+
+    #region Formatting
+
+    /// <summary>
+    /// 返回卡槽当前状态摘要。
+    /// </summary>
+    public override string ToString()
     {
-        _mapping = mapping ?? throw new ArgumentNullException(nameof(mapping));
-        _matchRequireCount = matchRequireCount;
-        _tiles = tiles ?? throw new ArgumentNullException(nameof(tiles));
-        _count = count;
-        _suitBits = suitBits;
-        _suitCounts = suitCounts ?? throw new ArgumentNullException(nameof(suitCounts));
+        return $"StagingArea(" +
+               $"Used={UsedCapacity}/{Capacity}, " +
+               $"Available={AvailableCapacity}, " +
+               $"IsFull={IsFull}, " +
+               $"IsEmpty={IsEmpty}, " +
+               $"Tiles=[{FormatTiles()}], " +
+               $"SuitBits={SuitBits}, " +
+               $"SuitCounts=[{FormatSuitCounts()}])";
     }
+
+    private string FormatTiles()
+    {
+        var text = string.Empty;
+
+        for (var i = 0; i < _count; i++)
+        {
+            if (text.Length > 0)
+                text += ", ";
+
+            var tileIndex = _tiles[i];
+            var suit = _mapping.GetSuit(tileIndex);
+
+            text += $"t{tileIndex}_s{suit}";
+        }
+
+        return text;
+    }
+
+    private string FormatSuitCounts()
+    {
+        var text = string.Empty;
+
+        for (var suit = 0; suit < _suitCounts.Length; suit++)
+        {
+            var count = _suitCounts[suit];
+            if (count == 0)
+                continue;
+
+            if (text.Length > 0)
+                text += ", ";
+
+            text += $"s{suit}_c{count}";
+        }
+
+        return text;
+    }
+
+    #endregion
+
+    #region Clone
+
+    /// <summary>
+    /// 创建当前卡槽状态的独立副本。
+    /// </summary>
+    public StagingArea Clone()
+    {
+        return new StagingArea(
+            _mapping,
+            _matchRequireCount,
+            (int[])_tiles.Clone(),
+            _count,
+            _suitBits,
+            (byte[])_suitCounts.Clone());
+    }
+
+    #endregion
 }

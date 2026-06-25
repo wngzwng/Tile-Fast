@@ -6,6 +6,56 @@ namespace Tile.Core.Tests.Core;
 public sealed class CorralTests
 {
     [Test]
+    public void ToString_ContainsCurrentStateSummary()
+    {
+        var corral = new Corral(capacity: 3);
+
+        var text = corral.ToString();
+
+        Assert.That(text, Does.Contain("Corral("));
+        Assert.That(text, Does.Contain("Count=0"));
+        Assert.That(text, Does.Contain("Capacity=3"));
+        Assert.That(text, Does.Contain("IsEmpty=True"));
+        Assert.That(text, Does.Contain("Tiles=[]"));
+
+        corral.Push(10);
+        corral.Push(20);
+
+        text = corral.ToString();
+
+        Assert.That(text, Does.Contain("Count=2"));
+        Assert.That(text, Does.Contain("IsEmpty=False"));
+        Assert.That(text, Does.Contain("Tiles=[t10, t20]"));
+    }
+
+    [Test]
+    public void ToString_WithMatchRequireCount_ShowsOnlyLastDoubleMatchRequireCountTiles()
+    {
+        var corral = new Corral(capacity: 8);
+
+        for (var tileIndex = 0; tileIndex < 8; tileIndex++)
+            corral.Push(tileIndex);
+
+        var text = corral.ToString(matchRequireCount: 3);
+
+        Assert.That(text, Does.Contain("Count=8"));
+        Assert.That(text, Does.Contain("Tiles(last6)=[t2, t3, t4, t5, t6, t7]"));
+    }
+
+    [Test]
+    public void ToString_WithMatchRequireCount_WhenStackIsShorter_ShowsAllTiles()
+    {
+        var corral = new Corral(capacity: 3);
+
+        corral.Push(10);
+        corral.Push(20);
+
+        var text = corral.ToString(matchRequireCount: 3);
+
+        Assert.That(text, Does.Contain("Tiles(last6)=[t10, t20]"));
+    }
+
+    [Test]
     public void PushPopAndPeek_FollowLifoOrder()
     {
         var corral = new Corral(capacity: 3);

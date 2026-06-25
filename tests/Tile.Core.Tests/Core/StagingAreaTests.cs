@@ -10,6 +10,36 @@ namespace Tile.Core.Tests.Core;
 public sealed class StagingAreaTests
 {
     [Test]
+    public void ToString_ContainsCurrentStateSummary()
+    {
+        var staging = CreateStagingArea(suits: [1, 2, 1]);
+
+        var text = staging.ToString();
+
+        Assert.That(text, Does.Contain("StagingArea("));
+        Assert.That(text, Does.Contain("Used=0/7"));
+        Assert.That(text, Does.Contain("Available=7"));
+        Assert.That(text, Does.Contain("IsFull=False"));
+        Assert.That(text, Does.Contain("IsEmpty=True"));
+        Assert.That(text, Does.Contain("Tiles=[]"));
+        Assert.That(text, Does.Contain("SuitBits=0"));
+        Assert.That(text, Does.Contain("SuitCounts=[]"));
+
+        staging.Enter(0);
+        staging.Enter(1);
+        staging.Enter(2);
+
+        text = staging.ToString();
+
+        Assert.That(text, Does.Contain("Used=3/7"));
+        Assert.That(text, Does.Contain("Available=4"));
+        Assert.That(text, Does.Contain("IsEmpty=False"));
+        Assert.That(text, Does.Contain("Tiles=[t0_s1, t2_s1, t1_s2]"));
+        Assert.That(text, Does.Contain($"SuitBits={SuitBits(1, 2)}"));
+        Assert.That(text, Does.Contain("SuitCounts=[s1_c2, s2_c1]"));
+    }
+
+    [Test]
     public void Add_WhenSuitAlreadyExists_InsertsAfterSameSuitGroup()
     {
         var staging = CreateStagingArea(suits: [1, 2, 1, 3, 2]);
