@@ -1,6 +1,6 @@
-
-
 using Tile.Core.Core.Types;
+
+namespace Tile.Core.Core;
 
 public class LevelRuleSpec
 {

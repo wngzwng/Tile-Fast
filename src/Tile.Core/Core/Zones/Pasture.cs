@@ -1,4 +1,5 @@
 using Tile.Core.Common.BitSet;
+using Tile.Core.Core;
 using Tile.Core.Core.Mapping;
 using Tile.Core.Core.Types;
 using Tile.Core.ExtensionTools;

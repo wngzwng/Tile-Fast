@@ -58,7 +58,7 @@ public static class LevelCodec
 
         var positionArray = positions.ToArray();
 
-        return new LevelCore(
+        return LevelCore.Create(
             positionArray.AsSpan(),
             ruleSpec,
             suits.AsSpan());

@@ -17,17 +17,17 @@ public sealed class LevelCore
 
     public Corral Corral { get; }
 
-    private Move[] _historyMoves;
-    private int _historyIndex = 0;
+    private readonly Move?[] _historyMoves;
+    private int _historyIndex;
 
-    public LevelCore(ReadOnlySpan<int> positons, LevelRuleSpec ruleSpec, ReadOnlySpan<int> sutis = default)
+    public LevelCore(ReadOnlySpan<int> positions, LevelRuleSpec ruleSpec, ReadOnlySpan<int> suits = default)
     {
         if (ruleSpec is null)
             throw new ArgumentNullException(nameof(ruleSpec));
 
-        var tileCount = positons.Length;
-        if (!sutis.IsEmpty && sutis.Length != tileCount)
-            throw new ArgumentException("If provided, sutis length must match positons length.", nameof(sutis));
+        var tileCount = positions.Length;
+        if (!suits.IsEmpty && suits.Length != tileCount)
+            throw new ArgumentException("If provided, suits length must match positions length.", nameof(suits));
 
         RuleSpec = ruleSpec;
         int maxCol = 0, maxRow = 0, maxLayer = 0;
@@ -35,15 +35,15 @@ public sealed class LevelCore
         for (var i = 0; i < tileCount; i++)
         {
             var index = i;
-            var position = positons[i];
-            var suit = sutis.IsEmpty ? Tile.SuitUnspecified : sutis[i];
+            var position = positions[i];
+            var suit = suits.IsEmpty ? Tile.SuitUnspecified : suits[i];
 
             tiles[i] = new Tile(index, position);
             tiles[i].SetSuit(suit);
 
             var (row, col, Layer) = position.UnpackRCZ();
             maxRow = Math.Max(row, maxRow);
-            maxCol = Math.Max(col, maxRow);
+            maxCol = Math.Max(col, maxCol);
             maxLayer = Math.Max(Layer, maxLayer);
         }
 
@@ -64,37 +64,54 @@ public sealed class LevelCore
             RuleSpec.MatchRequireCount,
             RuleSpec.SlotCapacity);
         Corral = new Corral(Mapping.TileCount);
-        _historyMoves = new Move[Mapping.TileCount];
+        _historyMoves = new Move?[Mapping.TileCount];
     }
 
+    public static LevelCore Create(
+        ReadOnlySpan<int> positions,
+        LevelRuleSpec ruleSpec,
+        ReadOnlySpan<int> suits = default)
+    {
+        return new LevelCore(positions, ruleSpec, suits);
+    }
 
+    /// <summary>
+    /// 执行完整 Move，并记录到撤销历史。
+    /// 组件级 API 仍保持公开；直接写组件状态时，调用方负责维护跨组件一致性。
+    /// </summary>
     public void DoMove(Move move)
     {
+        if (move is null)
+            throw new ArgumentNullException(nameof(move));
+
         if (!move.CanDo(this))
-        {
-            throw new InvalidOperationException($"{nameof(DoMove)}: 移动不合法");
-        }
+            throw new InvalidOperationException($"无法执行移动：{move}。");
+
+        if (_historyIndex >= _historyMoves.Length)
+            throw new InvalidOperationException("移动历史已满，无法继续执行移动。");
 
         move.Do(this);
         _historyMoves[_historyIndex++] = move;
+    }
 
+    public void UndoMove()
+    {
+        if (_historyIndex <= 0)
+            throw new InvalidOperationException("没有可撤销的移动。");
+
+        var undoIndex = _historyIndex - 1;
+        var lastMove = _historyMoves[undoIndex];
+        if (lastMove is null)
+            throw new InvalidOperationException("移动历史状态异常，无法撤销。");
+
+        lastMove.Undo(this);
+        _historyMoves[undoIndex] = null;
+        _historyIndex = undoIndex;
     }
 
     public void UnDoMove()
     {
-        if (_historyIndex < 0)
-        {
-            return;
-        }
-
-        var lastMove = _historyMoves[_historyIndex];
-        if (!lastMove.CanDo(this))
-        {
-            throw new InvalidOperationException($"{nameof(UnDoMove)}: 移动不合法");
-        }
-
-        lastMove.Do(this);
-        _historyIndex--;
+        UndoMove();
     }
 
     private LevelCore(
@@ -103,7 +120,7 @@ public sealed class LevelCore
         Pasture pasture,
         StagingArea stagingArea,
         Corral corral,
-        Move[] historyMoves,
+        Move?[] historyMoves,
         int historyIndex
         )
     {
@@ -125,7 +142,7 @@ public sealed class LevelCore
             Pasture.Clone(),
             StagingArea.Clone(),
             Corral.Clone(),
-            (Move[])_historyMoves.Clone(),
+            (Move?[])_historyMoves.Clone(),
             _historyIndex
             );
     }

@@ -146,7 +146,7 @@ public sealed class SelectMoveTests
 
     private static LevelCore CreateLevel(int[] positions, int[] suits)
     {
-        return new LevelCore(
+        return LevelCore.Create(
             positions,
             LevelRuleSpec.TripleTile,
             suits);

@@ -1,3 +1,5 @@
+namespace Tile.Core.Core.Zones;
+
 /// <summary>
 /// 已消除棋子的回收栈，按后入先出顺序保存 tileIndex。
 /// </summary>
@@ -24,7 +26,7 @@ public sealed class Corral
 
     #endregion
 
-    #region Construction
+    #region Object Basics
 
     /// <summary>
     /// 创建指定容量的回收栈。
@@ -44,6 +46,54 @@ public sealed class Corral
     {
         _tiles = tiles ?? throw new ArgumentNullException(nameof(tiles));
         _count = count;
+    }
+
+    /// <summary>
+    /// 清空回收栈，容量保持不变。
+    /// </summary>
+    public void Reset()
+    {
+        _tiles.AsSpan(0, _count).Fill(-1);
+        _count = 0;
+    }
+
+    /// <summary>
+    /// 创建当前回收栈状态的独立副本。
+    /// </summary>
+    public Corral Clone()
+    {
+        return new Corral(
+            (int[])_tiles.Clone(),
+            _count);
+    }
+
+    /// <summary>
+    /// 返回回收栈当前状态摘要。
+    /// </summary>
+    public override string ToString()
+    {
+        return $"Corral(" +
+               $"Count={Count}, " +
+               $"Capacity={_tiles.Length}, " +
+               $"IsEmpty={IsEmpty}, " +
+               $"Tiles=[{FormatTiles()}])";
+    }
+
+    /// <summary>
+    /// 返回回收栈当前状态摘要，只显示栈顶方向最后 <c>2 * matchRequireCount</c> 个棋子。
+    /// </summary>
+    public string ToString(int matchRequireCount)
+    {
+        if (matchRequireCount < 0)
+            throw new ArgumentOutOfRangeException(nameof(matchRequireCount), "匹配所需数量不能小于 0。");
+
+        var tileLimit = matchRequireCount * 2;
+
+        return $"Corral(" +
+               $"Count={Count}, " +
+               $"Capacity={_tiles.Length}, " +
+               $"IsEmpty={IsEmpty}, " +
+               $"Tiles(last{tileLimit})=[{FormatTiles(tileLimit)}])";
     }
 
     #endregion
@@ -114,18 +164,9 @@ public sealed class Corral
         return _tiles[_count - 1];
     }
 
-    /// <summary>
-    /// 清空回收栈，容量保持不变。
-    /// </summary>
-    public void Reset()
-    {
-        _tiles.AsSpan(0, _count).Fill(-1);
-        _count = 0;
-    }
-
     #endregion
 
-    #region Validation
+    #region Stable Core Semantics
 
     private void ValidatePopCount(int count)
     {
@@ -134,39 +175,6 @@ public sealed class Corral
 
         if (count > _count)
             throw new InvalidOperationException($"无法弹出 {count} 个棋子，当前只有 {_count} 个。");
-    }
-
-    #endregion
-
-    #region Formatting
-
-    /// <summary>
-    /// 返回回收栈当前状态摘要。
-    /// </summary>
-    public override string ToString()
-    {
-        return $"Corral(" +
-               $"Count={Count}, " +
-               $"Capacity={_tiles.Length}, " +
-               $"IsEmpty={IsEmpty}, " +
-               $"Tiles=[{FormatTiles()}])";
-    }
-
-    /// <summary>
-    /// 返回回收栈当前状态摘要，只显示栈顶方向最后 <c>2 * matchRequireCount</c> 个棋子。
-    /// </summary>
-    public string ToString(int matchRequireCount)
-    {
-        if (matchRequireCount < 0)
-            throw new ArgumentOutOfRangeException(nameof(matchRequireCount), "匹配所需数量不能小于 0。");
-
-        var tileLimit = matchRequireCount * 2;
-
-        return $"Corral(" +
-               $"Count={Count}, " +
-               $"Capacity={_tiles.Length}, " +
-               $"IsEmpty={IsEmpty}, " +
-               $"Tiles(last{tileLimit})=[{FormatTiles(tileLimit)}])";
     }
 
     private string FormatTiles()
@@ -188,20 +196,6 @@ public sealed class Corral
         }
 
         return text;
-    }
-
-    #endregion
-
-    #region Clone
-
-    /// <summary>
-    /// 创建当前回收栈状态的独立副本。
-    /// </summary>
-    public Corral Clone()
-    {
-        return new Corral(
-            (int[])_tiles.Clone(),
-            _count);
     }
 
     #endregion

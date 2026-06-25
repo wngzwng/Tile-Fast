@@ -1,11 +1,195 @@
 using NUnit.Framework;
 using Tile.Core.Core;
+using Tile.Core.Core.Moves;
 using Tile.Core.ExtensionTools;
 
 namespace Tile.Core.Tests.Core;
 
 public sealed class LevelCoreTests
 {
+    [Test]
+    public void DoMove_WhenMoveIsValid_AppliesMoveAndRecordsHistory()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz(),
+                (2, 0, 0).PackXyz()
+            ],
+            suits: [1, 2]);
+
+        level.DoMove(new SelectMove(tileIndex: 0));
+
+        Assert.That(level.Pasture.IsPresent(0), Is.False);
+        Assert.That(level.StagingArea.Tiles.ToArray(), Is.EqualTo(new[] { 0 }));
+        Assert.That(level.Corral.Count, Is.Zero);
+    }
+
+    [Test]
+    public void DoMove_WhenMoveIsNull_Throws()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz()
+            ],
+            suits: [1]);
+
+        Assert.Throws<ArgumentNullException>(() => level.DoMove(null!));
+    }
+
+    [Test]
+    public void DoMove_WhenMoveIsInvalid_ThrowsAndDoesNotChangeBoard()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz(),
+                (0, 0, 1).PackXyz()
+            ],
+            suits: [1, 2]);
+
+        var error = Assert.Throws<InvalidOperationException>(() => level.DoMove(new SelectMove(tileIndex: 0)));
+
+        Assert.That(error!.Message, Does.Contain("无法执行移动"));
+        Assert.That(level.Pasture.IsPresent(0), Is.True);
+        Assert.That(level.StagingArea.Tiles.ToArray(), Is.Empty);
+        Assert.That(level.Corral.Count, Is.Zero);
+    }
+
+    [Test]
+    public void UnDoMove_WhenHistoryIsEmpty_Throws()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz()
+            ],
+            suits: [1]);
+
+        var error = Assert.Throws<InvalidOperationException>(() => level.UnDoMove());
+
+        Assert.That(error!.Message, Does.Contain("没有可撤销的移动"));
+    }
+
+    [Test]
+    public void UndoMove_WhenHistoryIsEmpty_Throws()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz()
+            ],
+            suits: [1]);
+
+        var error = Assert.Throws<InvalidOperationException>(() => level.UndoMove());
+
+        Assert.That(error!.Message, Does.Contain("没有可撤销的移动"));
+    }
+
+    [Test]
+    public void UnDoMove_WhenLastMoveHasNoMatch_RestoresPreviousState()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz(),
+                (2, 0, 0).PackXyz()
+            ],
+            suits: [1, 2]);
+
+        level.DoMove(new SelectMove(tileIndex: 0));
+        level.UnDoMove();
+
+        Assert.That(level.Pasture.IsPresent(0), Is.True);
+        Assert.That(level.StagingArea.Tiles.ToArray(), Is.Empty);
+        Assert.That(level.Corral.Count, Is.Zero);
+    }
+
+    [Test]
+    public void UndoMove_WhenLastMoveHasNoMatch_RestoresPreviousState()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz(),
+                (2, 0, 0).PackXyz()
+            ],
+            suits: [1, 2]);
+
+        level.DoMove(new SelectMove(tileIndex: 0));
+        level.UndoMove();
+
+        Assert.That(level.Pasture.IsPresent(0), Is.True);
+        Assert.That(level.StagingArea.Tiles.ToArray(), Is.Empty);
+        Assert.That(level.Corral.Count, Is.Zero);
+    }
+
+    [Test]
+    public void UnDoMove_WhenLastMoveHasMatch_RestoresMatchedGroup()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz(),
+                (2, 0, 0).PackXyz(),
+                (4, 0, 0).PackXyz()
+            ],
+            suits: [1, 1, 1]);
+
+        level.DoMove(new SelectMove(tileIndex: 0));
+        level.DoMove(new SelectMove(tileIndex: 1));
+        level.DoMove(new SelectMove(tileIndex: 2));
+        level.UnDoMove();
+
+        Assert.That(level.Pasture.IsPresent(2), Is.True);
+        Assert.That(level.StagingArea.Tiles.ToArray(), Is.EqualTo(new[] { 0, 1 }));
+        Assert.That(level.Corral.Count, Is.Zero);
+    }
+
+    [Test]
+    public void Create_CreatesEquivalentStateToConstructor()
+    {
+        int[] positions =
+        [
+            (0, 0, 0).PackXyz(),
+            (6, 0, 0).PackXyz(),
+            (2, 4, 1).PackXyz()
+        ];
+
+        int[] suits = [1, 2, 3];
+
+        var fromConstructor = new LevelCore(
+            positions.AsSpan(),
+            LevelRuleSpec.TripleTile,
+            suits.AsSpan());
+
+        var fromFactory = LevelCore.Create(
+            positions.AsSpan(),
+            LevelRuleSpec.TripleTile,
+            suits.AsSpan());
+
+        Assert.That(fromFactory.ToString(), Is.EqualTo(fromConstructor.ToString()));
+        Assert.That(fromFactory.Serialize(), Is.EqualTo(fromConstructor.Serialize()));
+    }
+
+    [Test]
+    public void Constructor_WhenColumnExceedsRow_ComputesMaxColFromColumn()
+    {
+        int[] positions =
+        [
+            (8, 1, 0).PackXyz()
+        ];
+
+        var level = LevelCore.Create(
+            positions.AsSpan(),
+            LevelRuleSpec.TripleTile);
+
+        Assert.That(level.Mapping.MaxRow, Is.EqualTo(3));
+        Assert.That(level.Mapping.MaxCol, Is.EqualTo(10));
+        Assert.That(level.Mapping.MaxLayer, Is.EqualTo(1));
+    }
+
     [Test]
     public void ToString_ContainsKeyStateSummary()
     {
@@ -66,5 +250,13 @@ public sealed class LevelCoreTests
         Assert.That(text, Does.Contain("  StagingArea=StagingArea("));
         Assert.That(text, Does.Contain("  Corral=Corral("));
         Assert.That(text, Does.EndWith("\n)"));
+    }
+
+    private static LevelCore CreateLevel(int[] positions, int[] suits)
+    {
+        return LevelCore.Create(
+            positions,
+            LevelRuleSpec.TripleTile,
+            suits);
     }
 }
