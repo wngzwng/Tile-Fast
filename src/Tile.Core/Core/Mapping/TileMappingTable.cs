@@ -1,7 +1,7 @@
 using System.Numerics;
 using Tile.Core.Common.BitSet;
 using Tile.Core.Core.Types;
-using Tile.Core.ExtensionTools;
+using Tile.Core.Core.Utils;
 
 namespace Tile.Core.Core.Mapping;
 
@@ -33,11 +33,6 @@ public sealed class TileMappingTable
     // 起始位置 = suit * WordCount
     // 长度 = WordCount
     private readonly ulong[] _tileBitsBySuitFlat;
-
-    // tileIndex -> affected tile bitset
-    // 起始位置 = tileIndex * WordCount
-    // 长度 = WordCount
-    private readonly ulong[] _affectedTileBitsByTileIndexFlat;
 
     // 当前关卡实际出现过的 suit 集合
     private readonly ulong _suitBits;
@@ -104,7 +99,6 @@ public sealed class TileMappingTable
         int[] occupiedRegionIdsByTileIndexFlat,
         int[] tileIndexByRegionId,
         ulong[] tileBitsBySuitFlat,
-        ulong[] affectedTileBitsByTileIndexFlat,
         ulong suitBits)
     {
         _tiles = tiles;
@@ -118,7 +112,6 @@ public sealed class TileMappingTable
         _occupiedRegionIdsByTileIndexFlat = occupiedRegionIdsByTileIndexFlat;
         _tileIndexByRegionId = tileIndexByRegionId;
         _tileBitsBySuitFlat = tileBitsBySuitFlat;
-        _affectedTileBitsByTileIndexFlat = affectedTileBitsByTileIndexFlat;
         _suitBits = suitBits;
     }
 
@@ -158,9 +151,6 @@ public sealed class TileMappingTable
         var tileBitsBySuitFlat =
             new ulong[Tile.MaxSuitCount * wordCount];
 
-        var affectedTileBitsByTileIndexFlat =
-            new ulong[tileCount * wordCount];
-
         var suitBits = BuildTileFacts(
             tiles,
             tileArray,
@@ -189,14 +179,7 @@ public sealed class TileMappingTable
             occupiedRegionIdsByTileIndexFlat,
             tileIndexByRegionId,
             tileBitsBySuitFlat,
-            affectedTileBitsByTileIndexFlat,
             suitBits);
-
-        mapping.BuildAffectedTileBits(
-            tileArray,
-            lockRule,
-            wordCount,
-            affectedTileBitsByTileIndexFlat);
 
         return mapping;
     }
@@ -291,141 +274,6 @@ public sealed class TileMappingTable
     {
         var regionId = _regionIdMapper.ToRegionId(position);
         return TileOccupiesRegionId(tileIndex, regionId);
-    }
-
-    #endregion
-
-    #region Affected Tile Queries
-
-    public ReadOnlySpan<ulong> GetAffectedTileBits(int tileIndex)
-    {
-        ValidateTileIndex(tileIndex);
-
-        return _affectedTileBitsByTileIndexFlat.AsSpan(
-            tileIndex * WordCount,
-            WordCount);
-    }
-
-    public TileIndexSet GetAffectedTileIndexSet(int tileIndex)
-    {
-        return TileIndexSet.Wrap(GetAffectedTileBits(tileIndex));
-    }
-
-    #endregion
-
-    #region Neighbor Queries
-
-    // 预留：后续 TileMappingTable 只提供静态邻居候选。
-    // Pasture 负责基于 _present 过滤得到动态在场邻居。
-    public int GetNeighbors(
-        int tileIndex,
-        NeighborDirEnum dir,
-        Span<int> buffer)
-    {
-        ValidateTileIndex(tileIndex);
-        return GetNeighbors(_tiles[tileIndex], dir, buffer);
-    }
-
-    private int GetNeighbors(
-        Tile tile,
-        NeighborDirEnum dir,
-        Span<int> buffer)
-    {
-        if (buffer.Length < 4)
-            throw new ArgumentException("邻居缓冲区长度不足。", nameof(buffer));
-
-        var (x, y, z) = PositionPacker.UnpackXyz(tile.Position);
-        var (sizeX, sizeY, sizeZ) = Tile.DefaultVolume.UnpackXyz();
-
-        var count = 0;
-
-        switch (dir)
-        {
-            case NeighborDirEnum.Left:
-                TryAddNeighborAt(x - 1, y, z, tile.Index, buffer, ref count);
-                TryAddNeighborAt(x - 1, y + 1, z, tile.Index, buffer, ref count);
-                break;
-
-            case NeighborDirEnum.Right:
-                TryAddNeighborAt(x + sizeX, y, z, tile.Index, buffer, ref count);
-                TryAddNeighborAt(x + sizeX, y + 1, z, tile.Index, buffer, ref count);
-                break;
-
-            case NeighborDirEnum.Front:
-                TryAddNeighborAt(x, y - 1, z, tile.Index, buffer, ref count);
-                TryAddNeighborAt(x + 1, y - 1, z, tile.Index, buffer, ref count);
-                break;
-
-            case NeighborDirEnum.Back:
-                TryAddNeighborAt(x, y + sizeY, z, tile.Index, buffer, ref count);
-                TryAddNeighborAt(x + 1, y + sizeY, z, tile.Index, buffer, ref count);
-                break;
-
-            case NeighborDirEnum.Up:
-                TryAddNeighborAt(x, y, z + sizeZ, tile.Index, buffer, ref count);
-                TryAddNeighborAt(x + 1, y, z + sizeZ, tile.Index, buffer, ref count);
-                TryAddNeighborAt(x, y + 1, z + sizeZ, tile.Index, buffer, ref count);
-                TryAddNeighborAt(x + 1, y + 1, z + sizeZ, tile.Index, buffer, ref count);
-                break;
-
-            case NeighborDirEnum.Down:
-                TryAddNeighborAt(x, y, z - 1, tile.Index, buffer, ref count);
-                TryAddNeighborAt(x + 1, y, z - 1, tile.Index, buffer, ref count);
-                TryAddNeighborAt(x, y + 1, z - 1, tile.Index, buffer, ref count);
-                TryAddNeighborAt(x + 1, y + 1, z - 1, tile.Index, buffer, ref count);
-                break;
-
-            default:
-                throw new ArgumentOutOfRangeException(nameof(dir), dir, "未知邻接方向。");
-        }
-
-        return count;
-    }
-
-    private void TryAddNeighborAt(
-        int x,
-        int y,
-        int z,
-        int sourceTileIndex,
-        Span<int> buffer,
-        ref int count)
-    {
-        if (!IsInsideBoard(x, y, z))
-            return;
-
-        var position = PositionPacker.PackXyz(x, y, z);
-
-        if (!TryGetTileIndexAtPosition(position, out var tileIndex))
-            return;
-
-        if (tileIndex == sourceTileIndex)
-            return;
-
-        if (Contains(buffer, count, tileIndex))
-            return;
-
-        buffer[count++] = tileIndex;
-    }
-
-    private bool IsInsideBoard(int x, int y, int z)
-    {
-        return x >= 0 && x < MaxCol
-            && y >= 0 && y < MaxRow
-            && z >= 0 && z < MaxLayer;
-    }
-
-    private static bool Contains(
-        ReadOnlySpan<int> buffer,
-        int count,
-        int tileIndex)
-    {
-        for (var i = 0; i < count; i++)
-        {
-            if (buffer[i] == tileIndex)
-                return true;
-        }
-
-        return false;
     }
 
     #endregion
@@ -615,124 +463,6 @@ public sealed class TileMappingTable
         }
     }
 
-    private void BuildAffectedTileBits(
-        Tile[] tiles,
-        LockRuleTypeEnum lockRule,
-        int wordCount,
-        ulong[] affectedTileBitsByTileIndexFlat)
-    {
-        Span<int> neighbors = stackalloc int[4];
-
-        foreach (var tile in tiles)
-        {
-            var affectedBits = affectedTileBitsByTileIndexFlat.AsSpan(
-                tile.Index * wordCount,
-                wordCount);
-
-            var (startX, startY, startZ) = PositionPacker.UnpackXyz(tile.Position);
-
-            // ------------------------------------------------------------
-            // 1. 收集下方受影响的棋子。
-            //
-            // 当前 Tile 默认覆盖 2x2 面：
-            // (x,     y)
-            // (x + 1, y)
-            // (x,     y + 1)
-            // (x + 1, y + 1)
-            //
-            // 对每个覆盖点，从当前层下方开始向下探测。
-            // 每个垂直柱只命中第一个棋子。
-            // ------------------------------------------------------------
-            if (startZ > 0)
-            {
-                AddFirstHitBelow(
-                    startX,
-                    startY,
-                    startZ,
-                    affectedBits);
-
-                AddFirstHitBelow(
-                    startX + 1,
-                    startY,
-                    startZ,
-                    affectedBits);
-
-                AddFirstHitBelow(
-                    startX,
-                    startY + 1,
-                    startZ,
-                    affectedBits);
-
-                AddFirstHitBelow(
-                    startX + 1,
-                    startY + 1,
-                    startZ,
-                    affectedBits);
-            }
-
-            // ------------------------------------------------------------
-            // 2. Classic 规则额外收集左右锁定相关棋子。
-            //
-            // Tile 模式：
-            // 只关心上下遮挡关系。
-            //
-            // Classic 模式：
-            // 还要关心左右方向上的邻接棋子。
-            //
-            // 这里只表达规则依赖：Classic 受左右静态邻居影响。
-            // 具体面坐标收集由 GetNeighbors 统一处理。
-            // ------------------------------------------------------------
-            if (lockRule == LockRuleTypeEnum.Classic)
-            {
-                var neighborCount = GetNeighbors(
-                    tile,
-                    NeighborDirEnum.Left,
-                    neighbors);
-
-                AddTileIndexesToBits(
-                    neighbors[..neighborCount],
-                    affectedBits);
-
-                neighborCount = GetNeighbors(
-                    tile,
-                    NeighborDirEnum.Right,
-                    neighbors);
-
-                AddTileIndexesToBits(
-                    neighbors[..neighborCount],
-                    affectedBits);
-            }
-        }
-    }
-
-    private void AddFirstHitBelow(
-        int x,
-        int y,
-        int startZ,
-        Span<ulong> affectedBits)
-    {
-        for (var z = startZ - 1; z >= 0; z--)
-        {
-            var position = PositionPacker.PackXyz(x, y, z);
-
-            if (!TryGetTileIndexAtPosition(position, out var tileIndex))
-                continue;
-
-            BitSetOperations.Set(affectedBits, tileIndex);
-            break;
-        }
-    }
-
-    private static void AddTileIndexesToBits(
-        ReadOnlySpan<int> tileIndexes,
-        Span<ulong> bits)
-    {
-        foreach (var tileIndex in tileIndexes)
-        {
-            BitSetOperations.Set(bits, tileIndex);
-        }
-    }
-
     #endregion
 
     #region Geometry Helpers
@@ -747,7 +477,7 @@ public sealed class TileMappingTable
         {
             get
             {
-                var (dx, dy, dz) = Tile.DefaultVolume.UnpackXyz();
+                var (dx, dy, dz) = PositionPacker.UnpackXyz(Tile.DefaultVolume);
                 return new TileBounds(0, 0, 0, dx, dy, dz);
             }
         }
@@ -806,8 +536,8 @@ public sealed class TileMappingTable
 
         public static TileBounds FromTileDefaultVolume(Tile tile)
         {
-            var (x, y, z) = tile.Position.UnpackXyz();
-            var (dx, dy, dz) = Tile.DefaultVolume.UnpackXyz();
+            var (x, y, z) = PositionPacker.UnpackXyz(tile.Position);
+            var (dx, dy, dz) = PositionPacker.UnpackXyz(Tile.DefaultVolume);
 
             return new TileBounds(
                 x,
@@ -857,7 +587,7 @@ public sealed class TileMappingTable
 
         public bool ContainsPosition(int position)
         {
-            var (x, y, z) = position.UnpackXyz();
+            var (x, y, z) = PositionPacker.UnpackXyz(position);
             return Contains(x, y, z);
         }
 

@@ -1,4 +1,4 @@
-using Tile.Core.ExtensionTools;
+using Tile.Core.Core.Utils;
 
 namespace Tile.Core;
 
@@ -27,7 +27,7 @@ public sealed class Tile(int index, int position) : IEquatable<Tile>
     /// <summary>
     /// 默认体积，对应 <c>(dx: 2, dy: 2, dz: 1)</c>。
     /// </summary>
-    public static readonly int DefaultVolume = (2, 2, 1).PackXyz();
+    public static readonly int DefaultVolume = PositionPacker.PackXyz(2, 2, 1);
 
     /// <summary>
     /// 关卡内唯一编号，使用 0-based。
@@ -62,8 +62,8 @@ public sealed class Tile(int index, int position) : IEquatable<Tile>
     {
         get
         {
-            var (_, _, z0) = Position.UnpackXyz();
-            var (_, _, dz) = Volume.UnpackXyz();
+            var (_, _, z0) = PositionPacker.UnpackXyz(Position);
+            var (_, _, dz) = PositionPacker.UnpackXyz(Volume);
             return z0 + dz - 1;
         }
     }
@@ -111,7 +111,7 @@ public sealed class Tile(int index, int position) : IEquatable<Tile>
     /// </summary>
     public (int x, int y, int z) GetPositionXyz()
     {
-        return Position.UnpackXyz();
+        return PositionPacker.UnpackXyz(Position);
     }
 
     /// <summary>
@@ -119,7 +119,7 @@ public sealed class Tile(int index, int position) : IEquatable<Tile>
     /// </summary>
     public (int dx, int dy, int dz) GetVolumeXyz()
     {
-        return Volume.UnpackXyz();
+        return PositionPacker.UnpackXyz(Volume);
     }
 
     public bool Equals(Tile? other)
@@ -148,7 +148,7 @@ public sealed class Tile(int index, int position) : IEquatable<Tile>
 
     public override string ToString()
     {
-        return $"Tile(Index={Index}, Suit={Suit}, Position={Position.ToXyzString()}, Volume={Volume.ToXyzString()})";
+        return $"Tile(Index={Index}, Suit={Suit}, Position={PositionPacker.ToXyzString(Position)}, Volume={PositionPacker.ToXyzString(Volume)})";
     }
 }
 

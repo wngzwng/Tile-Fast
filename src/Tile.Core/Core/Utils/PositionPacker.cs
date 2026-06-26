@@ -1,4 +1,4 @@
-namespace Tile.Core.Core.Types;
+namespace Tile.Core.Core.Utils;
 
 /// <summary>
 /// packed position 的打包、解包与分量改写工具。

@@ -1,12 +1,21 @@
+using System.Text;
 using Tile.Core.Core.Mapping;
 using Tile.Core.Core.Moves;
 using Tile.Core.Core.Zones;
-using Tile.Core.ExtensionTools;
+using Tile.Core.Core.Utils;
 
 namespace Tile.Core.Core;
 
 public sealed class LevelCore
 {
+    private static class TextProtocol
+    {
+        public const char LayerSeparator = ';';
+        public const char RowSeparator = '.';
+        public const char ColumnSeparator = ',';
+        public const char SuitSeparator = ':';
+    }
+
     public LevelRuleSpec RuleSpec { get; }
 
     public TileMappingTable Mapping { get; }
@@ -41,13 +50,13 @@ public sealed class LevelCore
             tiles[i] = new Tile(index, position);
             tiles[i].SetSuit(suit);
 
-            var (row, col, Layer) = position.UnpackRCZ();
+            var (row, col, Layer) = PositionPacker.UnpackRcz(position);
             maxRow = Math.Max(row, maxRow);
             maxCol = Math.Max(col, maxCol);
             maxLayer = Math.Max(Layer, maxLayer);
         }
 
-        var (dRow, dCol, dLayer) = Tile.DefaultVolume.UnpackRCZ();
+        var (dRow, dCol, dLayer) = PositionPacker.UnpackRcz(Tile.DefaultVolume);
         maxRow += dRow;
         maxCol += dCol;
         maxLayer += dLayer;     
@@ -67,12 +76,249 @@ public sealed class LevelCore
         _historyMoves = new Move?[Mapping.TileCount];
     }
 
-    public static LevelCore Create(
-        ReadOnlySpan<int> positions,
-        LevelRuleSpec ruleSpec,
-        ReadOnlySpan<int> suits = default)
+    /// <summary>
+    /// 解析关卡字符串得到 LevelCore。
+    ///
+    /// 字符串格式：
+    /// <c>position[:suit]</c>
+    ///
+    /// position 格式：
+    /// <c>zrc[,c][.rc[,c]][;zrc[,c][.rc[,c]]]</c>
+    /// </summary>
+    public static LevelCore Deserialize(
+        string str,
+        LevelRuleSpec ruleSpec)
     {
-        return new LevelCore(positions, ruleSpec, suits);
+        #region 归一化输入
+
+        if (str is null)
+            throw new ArgumentNullException(nameof(str));
+
+        if (ruleSpec is null)
+            throw new ArgumentNullException(nameof(ruleSpec));
+
+        var normalized = str.Trim('\"', '\n', '\r', '\t', ' ', '●', '○');
+        var segments = normalized.Split(TextProtocol.SuitSeparator);
+
+        if (segments.Length > 2)
+            throw new ArgumentException("关卡字符串不合法，':' 分割的段超过 2 段。", nameof(str));
+
+        #endregion
+
+        #region 解析位置
+
+        List<int> positions = [];
+        HashSet<int> positionSet = [];
+        var boardStr = segments[0];
+
+        if (!string.IsNullOrEmpty(boardStr))
+        {
+            var layerStrings = boardStr.Split(
+                TextProtocol.LayerSeparator,
+                StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var layerStr in layerStrings)
+            {
+                if (layerStr.Length < 3)
+                    throw new InvalidOperationException("关卡字符串不合法，层信息不完整。");
+
+                var layer = Base62CharCodec.CharToIndex(layerStr[0]);
+                var rowsPart = layerStr[1..];
+                var rowStrings = rowsPart.Split(
+                    TextProtocol.RowSeparator,
+                    StringSplitOptions.RemoveEmptyEntries);
+
+                foreach (var rowStr in rowStrings)
+                {
+                    if (rowStr.Length < 2)
+                        throw new InvalidOperationException("关卡字符串不合法，行信息不完整。");
+
+                    var row = Base62CharCodec.CharToIndex(rowStr[0]);
+                    var columnsPart = rowStr[1..];
+
+                    if (string.IsNullOrEmpty(columnsPart))
+                        throw new InvalidOperationException("关卡字符串不合法，列信息不能为空。");
+
+                    if (columnsPart[0] == TextProtocol.ColumnSeparator)
+                        throw new InvalidOperationException("关卡字符串不合法，列信息不能以 ',' 开头。");
+
+                    if (columnsPart[^1] == TextProtocol.ColumnSeparator)
+                        throw new InvalidOperationException("关卡字符串不合法，列信息不能以 ',' 结尾。");
+
+                    var compactColumnCount = 0;
+
+                    for (var i = 0; i < columnsPart.Length; i++)
+                    {
+                        var ch = columnsPart[i];
+
+                        if (ch == TextProtocol.ColumnSeparator)
+                        {
+                            if (i + 1 >= columnsPart.Length || columnsPart[i + 1] == TextProtocol.ColumnSeparator)
+                                throw new InvalidOperationException("关卡字符串不合法，列分隔格式错误。");
+
+                            continue;
+                        }
+
+                        _ = Base62CharCodec.CharToIndex(ch);
+                        compactColumnCount++;
+                    }
+
+                    if (compactColumnCount * 2 - 1 != columnsPart.Length)
+                        throw new InvalidOperationException("关卡字符串不合法，列分隔格式错误。");
+
+                    foreach (var columnChar in columnsPart)
+                    {
+                        if (columnChar == TextProtocol.ColumnSeparator)
+                            continue;
+
+                        var column = Base62CharCodec.CharToIndex(columnChar);
+                        var position = PositionPacker.PackXyz(column, row, layer);
+
+                        if (!positionSet.Add(position))
+                        {
+                            throw new InvalidOperationException(
+                                $"关卡字符串不合法，棋子位置重复：column={column}, row={row}, layer={layer}。");
+                        }
+
+                        positions.Add(position);
+                    }
+                }
+            }
+        }
+
+        #endregion
+
+        #region 解析花色
+
+        var tileCount = positions.Count;
+        var suits = new int[tileCount];
+
+        Array.Fill(suits, Tile.SuitUnspecified);
+
+        if (segments.Length >= 2 && !string.IsNullOrEmpty(segments[1]) && segments[1].Length == tileCount)
+        {
+            var suitStr = segments[1];
+
+            for (var i = 0; i < suitStr.Length; i++)
+                suits[i] = Base62CharCodec.CharToIndex(suitStr[i]);
+        }
+
+        #endregion
+
+        #region 构建关卡
+
+        var positionArray = positions.ToArray();
+
+        return new LevelCore(
+            positionArray.AsSpan(),
+            ruleSpec,
+            suits.AsSpan());
+
+        #endregion
+    }
+
+    /// <summary>
+    /// 序列化 LevelCore。
+    /// 输出顺序固定为：
+    /// layer asc -> row asc -> column asc。
+    /// </summary>
+    public string Serialize()
+    {
+        #region 收集并排序棋子
+
+        var present = Pasture.PresentTiles;
+        var tileCount = present.Count();
+
+        var positions = new int[tileCount];
+        var suits = new int[tileCount];
+
+        var write = 0;
+
+        foreach (var tileIndex in present)
+        {
+            positions[write] = Mapping.GetPosition(tileIndex);
+            suits[write] = Mapping.GetSuit(tileIndex);
+            write++;
+        }
+
+        Array.Sort(
+            positions,
+            suits,
+            Comparer<int>.Create((left, right) =>
+            {
+                var layerCompare = PositionPacker.Z(left).CompareTo(PositionPacker.Z(right));
+
+                if (layerCompare != 0)
+                    return layerCompare;
+
+                var rowCompare = PositionPacker.Y(left).CompareTo(PositionPacker.Y(right));
+
+                if (rowCompare != 0)
+                    return rowCompare;
+
+                return PositionPacker.X(left).CompareTo(PositionPacker.X(right));
+            }));
+
+        var builder = new StringBuilder(tileCount * 6 + 1 + tileCount);
+
+        #endregion
+
+        #region 写入位置
+
+        for (var i = 0; i < positions.Length; i++)
+        {
+            var position = positions[i];
+
+            var column = PositionPacker.X(position);
+            var row = PositionPacker.Y(position);
+            var layer = PositionPacker.Z(position);
+
+            if (i == 0)
+            {
+                builder.Append(Base62CharCodec.GetCharFromInt(layer));
+                builder.Append(Base62CharCodec.GetCharFromInt(row));
+                builder.Append(Base62CharCodec.GetCharFromInt(column));
+                continue;
+            }
+
+            var previous = positions[i - 1];
+
+            var previousColumn = PositionPacker.X(previous);
+            var previousRow = PositionPacker.Y(previous);
+            var previousLayer = PositionPacker.Z(previous);
+
+            if (layer != previousLayer)
+            {
+                builder.Append(TextProtocol.LayerSeparator);
+                builder.Append(Base62CharCodec.GetCharFromInt(layer));
+                builder.Append(Base62CharCodec.GetCharFromInt(row));
+                builder.Append(Base62CharCodec.GetCharFromInt(column));
+            }
+            else if (row != previousRow)
+            {
+                builder.Append(TextProtocol.RowSeparator);
+                builder.Append(Base62CharCodec.GetCharFromInt(row));
+                builder.Append(Base62CharCodec.GetCharFromInt(column));
+            }
+            else if (column != previousColumn)
+            {
+                builder.Append(TextProtocol.ColumnSeparator);
+                builder.Append(Base62CharCodec.GetCharFromInt(column));
+            }
+        }
+
+        #endregion
+
+        #region 写入花色
+
+        builder.Append(TextProtocol.SuitSeparator);
+
+        foreach (var suit in suits)
+            builder.Append(Base62CharCodec.GetCharFromInt(suit));
+
+        return builder.ToString();
+
+        #endregion
     }
 
     /// <summary>

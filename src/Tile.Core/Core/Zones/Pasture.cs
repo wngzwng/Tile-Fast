@@ -2,7 +2,7 @@ using Tile.Core.Common.BitSet;
 using Tile.Core.Core;
 using Tile.Core.Core.Mapping;
 using Tile.Core.Core.Types;
-using Tile.Core.ExtensionTools;
+using Tile.Core.Core.Utils;
 
 namespace Tile.Core.Core.Zones;
 
@@ -11,10 +11,21 @@ namespace Tile.Core.Core.Zones;
 /// </summary>
 /// <remarks>
 /// <see cref="Pasture"/> 只维护动态状态：在场、可见、可选。
-/// 静态空间映射、邻居候选和受影响集合由 <see cref="TileMappingTable"/> 提供。
+/// 静态空间映射由 <see cref="TileMappingTable"/> 提供。
+/// 受影响集合由 Pasture 基于当前在场状态和规则即时计算。
 /// </remarks>
 public sealed class Pasture
 {
+    #region Types
+
+    private enum VerticalScanDir
+    {
+        Up,
+        Down
+    }
+
+    #endregion
+
     #region Fields
 
     private readonly TileMappingTable _mapping;
@@ -50,7 +61,7 @@ public sealed class Pasture
 
     #endregion
 
-    #region Construction
+    #region Object Basics
 
     /// <summary>
     /// 创建 Pasture，并根据映射表与规则初始化盘面状态。
@@ -89,9 +100,61 @@ public sealed class Pasture
         _selectable = selectable ?? throw new ArgumentNullException(nameof(selectable));
     }
 
+    /// <summary>
+    /// 重置 Pasture 到初始盘面状态。
+    /// </summary>
+    public void Reset()
+    {
+        Rebuild();
+    }
+
+    /// <summary>
+    /// 克隆当前 Pasture 状态。
+    /// </summary>
+    public Pasture Clone()
+    {
+        return new Pasture(
+            _mapping,
+            _lockRule,
+            (ulong[])_present.Clone(),
+            (ulong[])_visible.Clone(),
+            (ulong[])_selectable.Clone());
+    }
+
+    /// <summary>
+    /// 返回 Pasture 当前状态摘要。
+    /// </summary>
+    public override string ToString()
+    {
+        return $"Pasture(" +
+               $"Tiles={_mapping.TileCount}, " +
+               $"Rule={_lockRule}, " +
+               $"Present={PresentTiles.Count()}, " +
+               $"Visible={VisibleTiles.Count()}, " +
+               $"Selectable={SelectableTiles.Count()}, " +
+               $"VisibleTiles=[{FormatTileIndexes(VisibleTiles)}], " +
+               $"SelectableTiles=[{FormatTileIndexes(SelectableTiles)}], " +
+               $"IsEmpty={IsEmpty})";
+    }
+
+    private static string FormatTileIndexes(TileIndexSet tileIndexes)
+    {
+        var text = string.Empty;
+
+        foreach (var tileIndex in tileIndexes)
+        {
+            if (text.Length > 0)
+                text += ", ";
+
+            text += tileIndex;
+        }
+
+        return text;
+    }
+
     #endregion
 
-    #region State Queries
+    #region Real Board Semantics
 
     /// <summary>
     /// 指定棋子当前是否仍在 Pasture 中。
@@ -118,6 +181,156 @@ public sealed class Pasture
     {
         ValidateTileIndex(tileIndex);
         return BitSetOperations.Get(_selectable, tileIndex);
+    }
+
+    /// <summary>
+    /// 获取棋子顶面当前未被在场棋子遮挡的面积。
+    /// </summary>
+    public int GetExposedArea(int tileIndex)
+    {
+        var coveredArea = CollectUpperCoverTileBits(
+            tileIndex,
+            ignoredTileBits: default,
+            coverTileBits: default,
+            out _);
+
+        return 4 - coveredArea;
+    }
+
+    /// <summary>
+    /// 获取当前覆盖指定棋子顶面的上方棋子集合。
+    /// </summary>
+    /// <returns>覆盖棋子的去重数量。</returns>
+    public int GetUpperCoverTileBits(
+        int tileIndex,
+        Span<ulong> coverTileBits)
+    {
+        CollectUpperCoverTileBits(
+            tileIndex,
+            ignoredTileBits: default,
+            coverTileBits,
+            out var coverTileCount);
+
+        return coverTileCount;
+    }
+
+    /// <summary>
+    /// 获取当前被指定棋子底面覆盖的下方棋子集合。
+    /// </summary>
+    /// <returns>被覆盖棋子的去重数量。</returns>
+    public int GetLowerCoveredTileBits(
+        int tileIndex,
+        Span<ulong> coveredTileBits)
+    {
+        CollectLowerCoveredTileBits(
+            tileIndex,
+            ignoredTileBits: default,
+            coveredTileBits,
+            out var coveredTileCount);
+
+        return coveredTileCount;
+    }
+
+    /// <summary>
+    /// 指定方向上是否存在当前仍在场的邻居。
+    /// </summary>
+    public bool HasPresentNeighbor(int tileIndex, NeighborDirEnum dir)
+    {
+        Span<int> buffer = stackalloc int[4];
+        return GetPresentNeighbors(
+            tileIndex,
+            dir,
+            default,
+            buffer) > 0;
+    }
+
+    /// <summary>
+    /// 获取指定方向上当前仍在场的邻居。
+    /// </summary>
+    public int GetPresentNeighbors(
+        int tileIndex,
+        NeighborDirEnum dir,
+        Span<int> buffer)
+    {
+        return GetPresentNeighbors(
+            tileIndex,
+            dir,
+            default,
+            buffer);
+    }
+
+    #endregion
+
+    #region Simulation Semantics
+
+    /// <summary>
+    /// 在忽略指定棋子的模拟盘面中，计算目标棋子的可见与可选状态。
+    /// </summary>
+    public void SimulateState(
+        int tileIndex,
+        ReadOnlySpan<ulong> ignoredTileBits,
+        out bool visible,
+        out bool selectable)
+    {
+        GetTileState(
+            tileIndex,
+            ignoredTileBits,
+            out visible,
+            out selectable);
+    }
+
+    /// <summary>
+    /// 在忽略指定棋子的模拟盘面中，获取覆盖目标棋子顶面的上方棋子集合。
+    /// </summary>
+    /// <returns>覆盖棋子的去重数量。</returns>
+    public int SimulateUpperCoverTileBits(
+        int tileIndex,
+        ReadOnlySpan<ulong> ignoredTileBits,
+        Span<ulong> coverTileBits)
+    {
+        CollectUpperCoverTileBits(
+            tileIndex,
+            ignoredTileBits,
+            coverTileBits,
+            out var coverTileCount);
+
+        return coverTileCount;
+    }
+
+    /// <summary>
+    /// 在忽略指定棋子的模拟盘面中，获取被目标棋子底面覆盖的下方棋子集合。
+    /// </summary>
+    /// <returns>被覆盖棋子的去重数量。</returns>
+    public int SimulateLowerCoveredTileBits(
+        int tileIndex,
+        ReadOnlySpan<ulong> ignoredTileBits,
+        Span<ulong> coveredTileBits)
+    {
+        CollectLowerCoveredTileBits(
+            tileIndex,
+            ignoredTileBits,
+            coveredTileBits,
+            out var coveredTileCount);
+
+        return coveredTileCount;
+    }
+
+    /// <summary>
+    /// 在忽略指定棋子的模拟盘面中，获取目标棋子变化后受影响的棋子集合。
+    /// </summary>
+    /// <returns>受影响棋子的去重数量。</returns>
+    public int SimulateAffectedTileBits(
+        int tileIndex,
+        ReadOnlySpan<ulong> ignoredTileBits,
+        Span<ulong> affectedTileBits)
+    {
+        CollectAffectedTileBits(
+            tileIndex,
+            ignoredTileBits,
+            affectedTileBits,
+            out var affectedTileCount);
+
+        return affectedTileCount;
     }
 
     #endregion
@@ -153,14 +366,6 @@ public sealed class Pasture
         RefreshAffected(tileIndex);
     }
 
-    /// <summary>
-    /// 重置 Pasture 到初始盘面状态。
-    /// </summary>
-    public void Reset()
-    {
-        Rebuild();
-    }
-
     #endregion
 
     #region Refresh
@@ -171,8 +376,11 @@ public sealed class Pasture
     private void RefreshAffected(int tileIndex)
     {
         Span<ulong> affectedTileBits = stackalloc ulong[_mapping.WordCount];
-        _mapping.GetAffectedTileBits(tileIndex).CopyTo(affectedTileBits);
-        affectedTileBits.AndWith(_present);
+        CollectAffectedTileBits(
+            tileIndex,
+            ignoredTileBits: default,
+            affectedTileBits,
+            out _);
 
         RefreshOne(tileIndex);
 
@@ -188,27 +396,14 @@ public sealed class Pasture
         BitSetOperations.Clear(_visible, tileIndex);
         BitSetOperations.Clear(_selectable, tileIndex);
 
-        if (!IsPresent(tileIndex))
-            return;
+        GetTileState(
+            tileIndex,
+            ignoredTileBits: default,
+            out var visible,
+            out var selectable);
 
-        var exposedArea = GetExposedArea(tileIndex);
-
-        if (exposedArea <= 0)
-            return;
-
-        BitSetOperations.Set(_visible, tileIndex);
-
-        if (exposedArea != 4)
-            return;
-
-        var selectable = _lockRule switch
-        {
-            LockRuleTypeEnum.Tile => true,
-            LockRuleTypeEnum.Classic =>
-                !HasPresentNeighbor(tileIndex, NeighborDirEnum.Left)
-                || !HasPresentNeighbor(tileIndex, NeighborDirEnum.Right),
-            _ => throw new InvalidOperationException($"未知锁定规则：{_lockRule}。")
-        };
+        if (visible)
+            BitSetOperations.Set(_visible, tileIndex);
 
         if (selectable)
             BitSetOperations.Set(_selectable, tileIndex);
@@ -240,56 +435,174 @@ public sealed class Pasture
 
     #endregion
 
-    #region Exposure Queries
+    #region Stable Core Semantics
 
     /// <summary>
-    /// 获取棋子顶面当前未被在场棋子遮挡的面积。
+    /// 判断棋子在当前计算视角下是否有效在场。
     /// </summary>
-    private int GetExposedArea(int tileIndex)
+    private bool IsEffectivelyPresent(
+        int tileIndex,
+        ReadOnlySpan<ulong> ignoredTileBits)
     {
+        if (!BitSetOperations.Get(_present, tileIndex))
+            return false;
+
+        return ignoredTileBits.IsEmpty
+            || !BitSetOperations.Get(ignoredTileBits, tileIndex);
+    }
+
+    /// <summary>
+    /// 基于当前在场状态和忽略集合，获取单张棋子的可见与可选状态。
+    /// </summary>
+    private void GetTileState(
+        int tileIndex,
+        ReadOnlySpan<ulong> ignoredTileBits,
+        out bool visible,
+        out bool selectable)
+    {
+        ValidateTileIndex(tileIndex);
+        ValidateIgnoredTileBits(ignoredTileBits);
+
+        visible = false;
+        selectable = false;
+
+        if (!IsEffectivelyPresent(tileIndex, ignoredTileBits))
+            return;
+
+        var coveredArea = CollectUpperCoverTileBits(
+            tileIndex,
+            ignoredTileBits,
+            coverTileBits: default,
+            out _);
+
+        var exposedArea = 4 - coveredArea;
+
+        if (exposedArea <= 0)
+            return;
+
+        visible = true;
+
+        if (exposedArea != 4)
+            return;
+
+        selectable = _lockRule switch
+        {
+            LockRuleTypeEnum.Tile => true,
+            LockRuleTypeEnum.Classic =>
+                !HasPresentNeighbor(tileIndex, NeighborDirEnum.Left, ignoredTileBits)
+                || !HasPresentNeighbor(tileIndex, NeighborDirEnum.Right, ignoredTileBits),
+            _ => throw new InvalidOperationException($"未知锁定规则：{_lockRule}。")
+        };
+    }
+
+    /// <summary>
+    /// 收集上方覆盖者：谁盖住我。
+    /// </summary>
+    private int CollectUpperCoverTileBits(
+        int tileIndex,
+        ReadOnlySpan<ulong> ignoredTileBits,
+        Span<ulong> coverTileBits,
+        out int coverTileCount)
+    {
+        ValidateTileIndex(tileIndex);
+        ValidateIgnoredTileBits(ignoredTileBits);
+
+        if (coverTileBits.IsEmpty)
+        {
+            Span<ulong> temporaryCoverTileBits = stackalloc ulong[_mapping.WordCount];
+            return CollectVerticalHitTileBits(
+                tileIndex,
+                VerticalScanDir.Up,
+                ignoredTileBits,
+                temporaryCoverTileBits,
+                out coverTileCount);
+        }
+
+        ValidateCoverTileBits(coverTileBits);
+
+        return CollectVerticalHitTileBits(
+            tileIndex,
+            VerticalScanDir.Up,
+            ignoredTileBits,
+            coverTileBits,
+            out coverTileCount);
+    }
+
+    /// <summary>
+    /// 收集下方被覆盖者：我盖住谁。
+    /// </summary>
+    private int CollectLowerCoveredTileBits(
+        int tileIndex,
+        ReadOnlySpan<ulong> ignoredTileBits,
+        Span<ulong> coveredTileBits,
+        out int coveredTileCount)
+    {
+        ValidateTileIndex(tileIndex);
+        ValidateIgnoredTileBits(ignoredTileBits);
+        ValidateCoveredTileBits(coveredTileBits);
+
+        return CollectVerticalHitTileBits(
+            tileIndex,
+            VerticalScanDir.Down,
+            ignoredTileBits,
+            coveredTileBits,
+            out coveredTileCount);
+    }
+
+    /// <summary>
+    /// 垂直 hit 机制：从水平面 4 个点沿 Z 方向扫描，收集每个点命中的第一张有效在场棋子。
+    /// </summary>
+    private int CollectVerticalHitTileBits(
+        int tileIndex,
+        VerticalScanDir dir,
+        ReadOnlySpan<ulong> ignoredTileBits,
+        Span<ulong> hitTileBits,
+        out int hitTileCount)
+    {
+        hitTileBits.Clear();
+        hitTileCount = 0;
+
         var tile = _mapping.GetTile(tileIndex);
-        var (x, y, z) = tile.Position.UnpackXyz();
-        var topZ = tile.TopZ;
+        var (x, y, bottomZ) = PositionPacker.UnpackXyz(tile.Position);
+        var scanUp = dir == VerticalScanDir.Up;
+        var startZ = scanUp ? tile.TopZ : bottomZ;
         Span<int> positions = stackalloc int[]
         {
-            (x + 0, y + 0, topZ).PackXyz(),
-            (x + 1, y + 0, topZ).PackXyz(),
-            (x + 0, y + 1, topZ).PackXyz(),
-            (x + 1, y + 1, topZ).PackXyz(),
+            PositionPacker.PackXyz(x + 0, y + 0, startZ),
+            PositionPacker.PackXyz(x + 1, y + 0, startZ),
+            PositionPacker.PackXyz(x + 0, y + 1, startZ),
+            PositionPacker.PackXyz(x + 1, y + 1, startZ),
         };
 
-        var coveredArea = 0;
+        var hitArea = 0;
 
         foreach (var position in positions)
         {
-            // 每个顶面点只需要知道是否被上方第一张在场棋子遮挡。
-            for (var layer = topZ + 1; layer < _mapping.MaxLayer; layer++)
+            var layer = scanUp ? startZ + 1 : startZ - 1;
+
+            while (layer >= 0 && layer < _mapping.MaxLayer)
             {
-                var nextPosition = position.WithZ(layer);
+                var nextPosition = PositionPacker.WithZ(position, layer);
 
                 if (_mapping.TryGetTileIndexAtPosition(nextPosition, out var nextTileIndex)
-                    && IsPresent(nextTileIndex))
+                    && IsEffectivelyPresent(nextTileIndex, ignoredTileBits))
                 {
-                    coveredArea++;
+                    hitArea++;
+
+                    if (!BitSetOperations.Get(hitTileBits, nextTileIndex))
+                    {
+                        BitSetOperations.Set(hitTileBits, nextTileIndex);
+                        hitTileCount++;
+                    }
+
                     break;
                 }
+
+                layer += scanUp ? 1 : -1;
             }
         }
 
-        return 4 - coveredArea;
-    }
-
-    #endregion
-
-    #region Present Neighbor Queries
-
-    /// <summary>
-    /// 指定方向上是否存在当前仍在场的邻居。
-    /// </summary>
-    private bool HasPresentNeighbor(int tileIndex, NeighborDirEnum dir)
-    {
-        Span<int> buffer = stackalloc int[4];
-        return GetPresentNeighbors(tileIndex, dir, buffer) > 0;
+        return hitArea;
     }
 
     /// <summary>
@@ -298,11 +611,18 @@ public sealed class Pasture
     private int GetPresentNeighbors(
         int tileIndex,
         NeighborDirEnum dir,
+        ReadOnlySpan<ulong> ignoredTileBits,
         Span<int> buffer)
     {
+        ValidateTileIndex(tileIndex);
+        ValidateIgnoredTileBits(ignoredTileBits);
+
+        if (buffer.Length < 4)
+            throw new ArgumentException("邻居缓冲区长度不足。", nameof(buffer));
+
         Span<int> candidates = stackalloc int[4];
 
-        var candidateCount = _mapping.GetNeighbors(
+        var candidateCount = GetNeighborCandidates(
             tileIndex,
             dir,
             candidates);
@@ -313,13 +633,206 @@ public sealed class Pasture
         {
             var candidate = candidates[i];
 
-            if (!IsPresent(candidate))
+            if (!IsEffectivelyPresent(candidate, ignoredTileBits))
                 continue;
 
             buffer[count++] = candidate;
         }
 
         return count;
+    }
+
+    private bool HasPresentNeighbor(
+        int tileIndex,
+        NeighborDirEnum dir,
+        ReadOnlySpan<ulong> ignoredTileBits)
+    {
+        Span<int> buffer = stackalloc int[4];
+
+        return GetPresentNeighbors(
+            tileIndex,
+            dir,
+            ignoredTileBits,
+            buffer) > 0;
+    }
+
+    /// <summary>
+    /// 获取指定方向上的空间邻居候选。
+    /// </summary>
+    private int GetNeighborCandidates(
+        int tileIndex,
+        NeighborDirEnum dir,
+        Span<int> buffer)
+    {
+        if (buffer.Length < 4)
+            throw new ArgumentException("邻居缓冲区长度不足。", nameof(buffer));
+
+        var tile = _mapping.GetTile(tileIndex);
+        var (x, y, z) = PositionPacker.UnpackXyz(tile.Position);
+        var (sizeX, sizeY, sizeZ) = PositionPacker.UnpackXyz(Tile.DefaultVolume);
+
+        var count = 0;
+
+        switch (dir)
+        {
+            case NeighborDirEnum.Left:
+                TryAddNeighborCandidateAt(x - 1, y, z, tileIndex, buffer, ref count);
+                TryAddNeighborCandidateAt(x - 1, y + 1, z, tileIndex, buffer, ref count);
+                break;
+
+            case NeighborDirEnum.Right:
+                TryAddNeighborCandidateAt(x + sizeX, y, z, tileIndex, buffer, ref count);
+                TryAddNeighborCandidateAt(x + sizeX, y + 1, z, tileIndex, buffer, ref count);
+                break;
+
+            case NeighborDirEnum.Front:
+                TryAddNeighborCandidateAt(x, y - 1, z, tileIndex, buffer, ref count);
+                TryAddNeighborCandidateAt(x + 1, y - 1, z, tileIndex, buffer, ref count);
+                break;
+
+            case NeighborDirEnum.Back:
+                TryAddNeighborCandidateAt(x, y + sizeY, z, tileIndex, buffer, ref count);
+                TryAddNeighborCandidateAt(x + 1, y + sizeY, z, tileIndex, buffer, ref count);
+                break;
+
+            case NeighborDirEnum.Up:
+                TryAddNeighborCandidateAt(x, y, z + sizeZ, tileIndex, buffer, ref count);
+                TryAddNeighborCandidateAt(x + 1, y, z + sizeZ, tileIndex, buffer, ref count);
+                TryAddNeighborCandidateAt(x, y + 1, z + sizeZ, tileIndex, buffer, ref count);
+                TryAddNeighborCandidateAt(x + 1, y + 1, z + sizeZ, tileIndex, buffer, ref count);
+                break;
+
+            case NeighborDirEnum.Down:
+                TryAddNeighborCandidateAt(x, y, z - 1, tileIndex, buffer, ref count);
+                TryAddNeighborCandidateAt(x + 1, y, z - 1, tileIndex, buffer, ref count);
+                TryAddNeighborCandidateAt(x, y + 1, z - 1, tileIndex, buffer, ref count);
+                TryAddNeighborCandidateAt(x + 1, y + 1, z - 1, tileIndex, buffer, ref count);
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(dir), dir, "未知邻接方向。");
+        }
+
+        return count;
+    }
+
+    /// <summary>
+    /// 收集指定棋子变化后需要重新计算状态的棋子。
+    /// </summary>
+    private int CollectAffectedTileBits(
+        int tileIndex,
+        ReadOnlySpan<ulong> ignoredTileBits,
+        Span<ulong> affectedTileBits,
+        out int affectedTileCount)
+    {
+        ValidateTileIndex(tileIndex);
+        ValidateIgnoredTileBits(ignoredTileBits);
+        ValidateAffectedTileBits(affectedTileBits);
+
+        affectedTileBits.Clear();
+        affectedTileCount = 0;
+
+        CollectLowerCoveredTileBits(
+            tileIndex,
+            ignoredTileBits,
+            affectedTileBits,
+            out affectedTileCount);
+
+        if (_lockRule == LockRuleTypeEnum.Classic)
+        {
+            AddPresentNeighborsToAffected(
+                tileIndex,
+                NeighborDirEnum.Left,
+                ignoredTileBits,
+                affectedTileBits,
+                ref affectedTileCount);
+
+            AddPresentNeighborsToAffected(
+                tileIndex,
+                NeighborDirEnum.Right,
+                ignoredTileBits,
+                affectedTileBits,
+                ref affectedTileCount);
+        }
+
+        return affectedTileCount;
+    }
+
+    private void AddPresentNeighborsToAffected(
+        int tileIndex,
+        NeighborDirEnum dir,
+        ReadOnlySpan<ulong> ignoredTileBits,
+        Span<ulong> affectedTileBits,
+        ref int affectedTileCount)
+    {
+        Span<int> neighbors = stackalloc int[4];
+
+        var neighborCount = GetPresentNeighbors(
+            tileIndex,
+            dir,
+            ignoredTileBits,
+            neighbors);
+
+        for (var i = 0; i < neighborCount; i++)
+            AddAffectedTile(neighbors[i], affectedTileBits, ref affectedTileCount);
+    }
+
+    private void TryAddNeighborCandidateAt(
+        int x,
+        int y,
+        int z,
+        int sourceTileIndex,
+        Span<int> buffer,
+        ref int count)
+    {
+        if (!IsInsideBoard(x, y, z))
+            return;
+
+        var position = PositionPacker.PackXyz(x, y, z);
+
+        if (!_mapping.TryGetTileIndexAtPosition(position, out var tileIndex))
+            return;
+
+        if (tileIndex == sourceTileIndex)
+            return;
+
+        if (Contains(buffer, count, tileIndex))
+            return;
+
+        buffer[count++] = tileIndex;
+    }
+
+    private bool IsInsideBoard(int x, int y, int z)
+    {
+        return x >= 0 && x < _mapping.MaxCol
+            && y >= 0 && y < _mapping.MaxRow
+            && z >= 0 && z < _mapping.MaxLayer;
+    }
+
+    private static void AddAffectedTile(
+        int tileIndex,
+        Span<ulong> affectedTileBits,
+        ref int affectedTileCount)
+    {
+        if (BitSetOperations.Get(affectedTileBits, tileIndex))
+            return;
+
+        BitSetOperations.Set(affectedTileBits, tileIndex);
+        affectedTileCount++;
+    }
+
+    private static bool Contains(
+        ReadOnlySpan<int> buffer,
+        int count,
+        int tileIndex)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            if (buffer[i] == tileIndex)
+                return true;
+        }
+
+        return false;
     }
 
     #endregion
@@ -335,56 +848,28 @@ public sealed class Pasture
             throw new ArgumentOutOfRangeException(nameof(tileIndex));
     }
 
-    #endregion
-
-    #region Formatting
-
-    /// <summary>
-    /// 返回 Pasture 当前状态摘要。
-    /// </summary>
-    public override string ToString()
+    private void ValidateIgnoredTileBits(ReadOnlySpan<ulong> ignoredTileBits)
     {
-        return $"Pasture(" +
-               $"Tiles={_mapping.TileCount}, " +
-               $"Rule={_lockRule}, " +
-               $"Present={PresentTiles.Count()}, " +
-               $"Visible={VisibleTiles.Count()}, " +
-               $"Selectable={SelectableTiles.Count()}, " +
-               $"VisibleTiles=[{FormatTileIndexes(VisibleTiles)}], " +
-               $"SelectableTiles=[{FormatTileIndexes(SelectableTiles)}], " +
-               $"IsEmpty={IsEmpty})";
+        if (!ignoredTileBits.IsEmpty && ignoredTileBits.Length < _mapping.WordCount)
+            throw new ArgumentException("忽略棋子 bit 缓冲区长度不足。", nameof(ignoredTileBits));
     }
 
-    private static string FormatTileIndexes(TileIndexSet tileIndexes)
+    private void ValidateCoverTileBits(Span<ulong> coverTileBits)
     {
-        var text = string.Empty;
-
-        foreach (var tileIndex in tileIndexes)
-        {
-            if (text.Length > 0)
-                text += ", ";
-
-            text += tileIndex;
-        }
-
-        return text;
+        if (coverTileBits.Length < _mapping.WordCount)
+            throw new ArgumentException("覆盖棋子 bit 缓冲区长度不足。", nameof(coverTileBits));
     }
 
-    #endregion
-
-    #region Clone
-
-    /// <summary>
-    /// 克隆当前 Pasture 状态。
-    /// </summary>
-    public Pasture Clone()
+    private void ValidateCoveredTileBits(Span<ulong> coveredTileBits)
     {
-        return new Pasture(
-            _mapping,
-            _lockRule,
-            (ulong[])_present.Clone(),
-            (ulong[])_visible.Clone(),
-            (ulong[])_selectable.Clone());
+        if (coveredTileBits.Length < _mapping.WordCount)
+            throw new ArgumentException("被覆盖棋子 bit 缓冲区长度不足。", nameof(coveredTileBits));
+    }
+
+    private void ValidateAffectedTileBits(Span<ulong> affectedTileBits)
+    {
+        if (affectedTileBits.Length < _mapping.WordCount)
+            throw new ArgumentException("受影响棋子 bit 缓冲区长度不足。", nameof(affectedTileBits));
     }
 
     #endregion

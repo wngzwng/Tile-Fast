@@ -148,7 +148,7 @@ public sealed class LevelCoreTests
     }
 
     [Test]
-    public void Create_CreatesEquivalentStateToConstructor()
+    public void Deserialize_CreatesEquivalentStateToConstructor()
     {
         int[] positions =
         [
@@ -164,13 +164,10 @@ public sealed class LevelCoreTests
             LevelRuleSpec.TripleTile,
             suits.AsSpan());
 
-        var fromFactory = LevelCore.Create(
-            positions.AsSpan(),
-            LevelRuleSpec.TripleTile,
-            suits.AsSpan());
+        var fromText = LevelCore.Deserialize("000,6;142:123", LevelRuleSpec.TripleTile);
 
-        Assert.That(fromFactory.ToString(), Is.EqualTo(fromConstructor.ToString()));
-        Assert.That(fromFactory.Serialize(), Is.EqualTo(fromConstructor.Serialize()));
+        Assert.That(fromText.ToString(), Is.EqualTo(fromConstructor.ToString()));
+        Assert.That(fromText.Serialize(), Is.EqualTo(fromConstructor.Serialize()));
     }
 
     [Test]
@@ -181,9 +178,7 @@ public sealed class LevelCoreTests
             (8, 1, 0).PackXyz()
         ];
 
-        var level = LevelCore.Create(
-            positions.AsSpan(),
-            LevelRuleSpec.TripleTile);
+        var level = new LevelCore(positions.AsSpan(), LevelRuleSpec.TripleTile);
 
         Assert.That(level.Mapping.MaxRow, Is.EqualTo(3));
         Assert.That(level.Mapping.MaxCol, Is.EqualTo(10));
@@ -254,9 +249,6 @@ public sealed class LevelCoreTests
 
     private static LevelCore CreateLevel(int[] positions, int[] suits)
     {
-        return LevelCore.Create(
-            positions,
-            LevelRuleSpec.TripleTile,
-            suits);
+        return new LevelCore(positions, LevelRuleSpec.TripleTile, suits);
     }
 }

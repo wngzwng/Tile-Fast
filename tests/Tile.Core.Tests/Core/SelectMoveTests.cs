@@ -146,10 +146,7 @@ public sealed class SelectMoveTests
 
     private static LevelCore CreateLevel(int[] positions, int[] suits)
     {
-        return LevelCore.Create(
-            positions,
-            LevelRuleSpec.TripleTile,
-            suits);
+        return new LevelCore(positions, LevelRuleSpec.TripleTile, suits);
     }
 
     private static void MoveTileFromPastureToStagingArea(

@@ -1,4 +1,4 @@
-using Tile.Core.ExtensionTools;
+using Tile.Core.Core.Utils;
 
 namespace Tile.Core.Core.Mapping;
 /// <summary>
@@ -55,7 +55,7 @@ internal readonly struct RegionIdMapper
 
         public int ToRegionId(int position)
         {
-            var (x, y, z) = position.UnpackXyz();
+            var (x, y, z) = PositionPacker.UnpackXyz(position);
             return ToRegionId(x, y, z);
         }
 
