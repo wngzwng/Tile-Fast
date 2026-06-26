@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using Tile.Core.Core;
 using Tile.Core.Core.Moves;
+using Tile.Core.Core.Types;
 using Tile.Core.ExtensionTools;
 
 namespace Tile.Core.Tests.Core;
@@ -168,6 +169,29 @@ public sealed class LevelCoreTests
 
         Assert.That(fromText.ToString(), Is.EqualTo(fromConstructor.ToString()));
         Assert.That(fromText.Serialize(), Is.EqualTo(fromConstructor.Serialize()));
+    }
+
+    [Test]
+    public void ToLevel_WithRuleSpec_ForwardsToDeserialize()
+    {
+        var level = "000,2:12".ToLevel(LevelRuleSpec.PairClassic);
+
+        Assert.That(level.Serialize(), Is.EqualTo("000,2:12"));
+        Assert.That(level.RuleSpec, Is.SameAs(LevelRuleSpec.PairClassic));
+    }
+
+    [Test]
+    public void ToLevel_WithRuleValues_CreatesRuleSpec()
+    {
+        var level = "000,2:12".ToLevel(
+            matchRequireCount: 2,
+            slotCapacity: 4,
+            lockRuleType: LockRuleTypeEnum.Classic);
+
+        Assert.That(level.Serialize(), Is.EqualTo("000,2:12"));
+        Assert.That(level.RuleSpec.MatchRequireCount, Is.EqualTo(2));
+        Assert.That(level.RuleSpec.SlotCapacity, Is.EqualTo(4));
+        Assert.That(level.RuleSpec.LockRuleType, Is.EqualTo(LockRuleTypeEnum.Classic));
     }
 
     [Test]
