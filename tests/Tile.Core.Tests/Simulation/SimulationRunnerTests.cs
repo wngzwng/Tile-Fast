@@ -356,11 +356,16 @@ public sealed class SimulationRunnerTests
 
         public int FindCandidates(
             SimulationContext context,
-            Span<int> candidateBuffer)
+            IList<int> candidates)
         {
             CallCount++;
 
-            return context.SourceLevel.Pasture.SelectableTiles.CopyTo(candidateBuffer);
+            candidates.Clear();
+
+            foreach (var tileIndex in context.SourceLevel.Pasture.SelectableTiles)
+                candidates.Add(tileIndex);
+
+            return candidates.Count;
         }
     }
 
@@ -382,11 +387,10 @@ public sealed class SimulationRunnerTests
 
         public int SelectCandidateOffset(
             SimulationContext context,
-            ReadOnlySpan<int> candidateBuffer,
-            int candidateCount)
+            IReadOnlyList<int> candidates)
         {
             CallCount++;
-            CandidateCounts.Add(candidateCount);
+            CandidateCounts.Add(candidates.Count);
 
             return 0;
         }

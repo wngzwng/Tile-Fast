@@ -15,15 +15,17 @@ public sealed class RandomCandidateScorer : ISimulationCandidateScorer
 
     public int SelectCandidateOffset(
         SimulationContext context,
-        ReadOnlySpan<int> candidateBuffer,
-        int candidateCount)
+        IReadOnlyList<int> candidates)
     {
         if (context is null)
             throw new ArgumentNullException(nameof(context));
 
-        if (candidateCount <= 0)
-            throw new ArgumentOutOfRangeException(nameof(candidateCount));
+        if (candidates is null)
+            throw new ArgumentNullException(nameof(candidates));
 
-        return context.Random.Next(candidateCount);
+        if (candidates.Count <= 0)
+            throw new ArgumentOutOfRangeException(nameof(candidates));
+
+        return context.Random.Next(candidates.Count);
     }
 }

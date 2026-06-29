@@ -242,7 +242,7 @@ public interface ISimulationCandidateFinder
 
     int FindCandidates(
         SimulationContext context,
-        Span<int> candidateBuffer);
+        IList<int> candidates);
 }
 
 public interface ISimulationCandidateScorer
@@ -251,13 +251,16 @@ public interface ISimulationCandidateScorer
 
     int SelectCandidateOffset(
         SimulationContext context,
-        ReadOnlySpan<int> candidateBuffer,
-        int candidateCount);
+        IReadOnlyList<int> candidates);
 }
 ```
 
 默认实现使用 `SelectableTileCandidateFinder` 收集当前可选 tile，
 再由 `RandomCandidateScorer` 在候选集合中随机选择一个候选 offset。
+候选项统一由 `SimulationContext.Candidates` 表示当前容器，内部使用 `List<TCandidate>` 存储：
+
+* `SimulationCandidateMode.Tile` 下，候选值是 tileIndex。
+* `SimulationCandidateMode.Behaviour` 下，候选值是 `Behaviour`。
 
 ---
 
@@ -266,7 +269,9 @@ public interface ISimulationCandidateScorer
 * 控制执行时机
 * 不参与指标计算
 * 不直接处理 Event
-* `OnBehaviourBefore` / `OnBehaviourAfter` 可从 `SimulationContext.SelectedTileIndex` 读取本步选中的 Tile。
+* `OnBehaviourBefore` / `OnBehaviourAfter` 可从 `SimulationContext.Candidates.SelectedOffset` 读取本步选中的候选 offset。
+* Tile 候选模式下，可从 `SimulationContext.TileCandidates.SelectedItem` 或 `SimulationContext.SelectedCandidateValue` 读取本步选中的 tile 候选值。
+* Tile 候选模式下，也可从 `SimulationContext.SelectedTileIndex` 读取本步选中的 tileIndex。
 
 ---
 

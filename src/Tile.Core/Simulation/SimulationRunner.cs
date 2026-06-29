@@ -46,10 +46,10 @@ public sealed class SimulationRunner
                     FailPosition: context.MoveCount);
             }
 
+            var candidates = context.TileCandidates;
             var candidateCount = _candidateFinder.FindCandidates(
                 context,
-                context.SelectableBuffer);
-            context.SetCandidateCount(candidateCount);
+                candidates.MutableItems);
 
             if (candidateCount == 0)
             {
@@ -64,16 +64,15 @@ public sealed class SimulationRunner
 
             var selectedCandidateOffset = _candidateScorer.SelectCandidateOffset(
                 context,
-                context.SelectableBuffer,
-                candidateCount);
+                candidates.Items);
             if ((uint)selectedCandidateOffset >= (uint)candidateCount)
                 throw new InvalidOperationException("Simulation candidate scorer returned an invalid candidate offset.");
 
-            var tileIndex = context.SelectableBuffer[selectedCandidateOffset];
-            context.SetSelectedCandidate(selectedCandidateOffset, tileIndex);
+            context.SetSelectedCandidateOffset(selectedCandidateOffset);
+            var selectedCandidateValue = candidates.SelectedItem;
 
             InvokeBehaviourBeforeHooks(hooks, context, ref runBag);
-            level.DoMove(new SelectMove(tileIndex));
+            level.DoMove(new SelectMove(selectedCandidateValue));
             context.IncreaseMoveCount();
             InvokeBehaviourAfterHooks(hooks, context, ref runBag);
 

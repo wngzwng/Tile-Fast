@@ -11,10 +11,10 @@ public interface ISimulationCandidateScorer
     SimulationCandidateMode CandidateMode { get; }
 
     /// <summary>
-    /// 返回被选候选在 <paramref name="candidateBuffer"/> 中的 offset。
+    /// 返回被选候选在 <paramref name="candidates"/> 中的 offset。
+    /// 候选值的含义由 <see cref="CandidateMode"/> 决定。
     /// </summary>
     int SelectCandidateOffset(
         SimulationContext context,
-        ReadOnlySpan<int> candidateBuffer,
-        int candidateCount);
+        IReadOnlyList<int> candidates);
 }

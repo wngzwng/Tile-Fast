@@ -23,7 +23,9 @@ public sealed class SimulationContext
         SimulationCount = simulationCount;
         Random = random ?? throw new ArgumentNullException(nameof(random));
         CandidateMode = candidateMode;
-        SelectableBuffer = new int[sourceLevel.Mapping.TileCount];
+        Candidates = CreateCandidates(
+            candidateMode,
+            sourceLevel.Mapping.TileCount);
     }
 
     #region Batch Context
@@ -59,6 +61,25 @@ public sealed class SimulationContext
     public int FailureCount { get; private set; }
 
     /// <summary>
+    /// 当前模拟候选容器。
+    /// </summary>
+    public ISimulationCandidateSet Candidates { get; }
+
+    /// <summary>
+    /// 当前模拟 tile 候选容器；仅 Tile 模式可用。
+    /// </summary>
+    public SimulationCandidateSet<int> TileCandidates =>
+        Candidates as SimulationCandidateSet<int>
+        ?? throw new InvalidOperationException("Current simulation candidate mode is not Tile.");
+
+    /// <summary>
+    /// 当前模拟 behaviour 候选容器；仅 Behaviour 模式可用。
+    /// </summary>
+    public SimulationCandidateSet<Behaviour> BehaviourCandidates =>
+        Candidates as SimulationCandidateSet<Behaviour>
+        ?? throw new InvalidOperationException("Current simulation candidate mode is not Behaviour.");
+
+    /// <summary>
     /// 当前模拟候选来源模式。
     /// </summary>
     public SimulationCandidateMode CandidateMode { get; }
@@ -68,10 +89,12 @@ public sealed class SimulationContext
     /// </summary>
     public Random Random { get; }
 
+    public IReadOnlyList<int> CandidateBuffer => TileCandidates.Items;
+
     /// <summary>
-    /// 复用的候选 tile 缓冲区；有效长度由 <see cref="CandidateCount"/> 表示。
+    /// 复用的候选 tile 列表；仅用于 Tile 候选模式。
     /// </summary>
-    public int[] SelectableBuffer { get; }
+    public IReadOnlyList<int> SelectableBuffer => CandidateBuffer;
 
     internal void StartRun(int simulationIndex)
     {
@@ -84,8 +107,7 @@ public sealed class SimulationContext
         SimulationIndex = simulationIndex;
         RunStatus = LevelRunStatus.Pending;
         MoveCount = 0;
-        CandidateCount = 0;
-        ClearSelectedCandidate();
+        Candidates.Clear();
         SourceLevel = _initialLevel.Clone();
     }
 
@@ -107,7 +129,7 @@ public sealed class SimulationContext
     /// <summary>
     /// 当前 step 收集到的候选数量。
     /// </summary>
-    public int CandidateCount { get; private set; }
+    public int CandidateCount => Candidates.Count;
 
     /// <summary>
     /// 当前 run 已执行的行为数量。
@@ -115,42 +137,38 @@ public sealed class SimulationContext
     public int MoveCount { get; private set; }
 
     /// <summary>
-    /// 当前已选候选在 <see cref="SelectableBuffer"/> 中的 offset；未选定时为 -1。
+    /// 当前已选候选在 <see cref="CandidateBuffer"/> 中的 offset；未选定时为 -1。
     /// </summary>
-    public int SelectedCandidateOffset { get; private set; } = -1;
+    public int SelectedCandidateOffset => Candidates.SelectedOffset;
 
     /// <summary>
-    /// 当前 step 选中的 tileIndex；未选定时为 -1。
+    /// 当前 step 选中的候选值；未选定时为 -1。
+    /// 候选值的含义由 <see cref="CandidateMode"/> 决定。
     /// </summary>
-    public int SelectedTileIndex { get; private set; } = -1;
+    public int SelectedCandidateValue =>
+        CandidateMode == SimulationCandidateMode.Tile &&
+        TileCandidates.TryGetSelectedItem(out var item)
+            ? item
+            : -1;
 
-    internal void SetCandidateCount(int candidateCount)
+    /// <summary>
+    /// 当前 step 选中的 tileIndex；仅在 Tile 候选模式下有意义，未选定时为 -1。
+    /// </summary>
+    public int SelectedTileIndex => SelectedCandidateValue;
+
+    internal void SetSelectedCandidateOffset(int selectedCandidateOffset)
     {
-        if (candidateCount < 0)
-            throw new ArgumentOutOfRangeException(nameof(candidateCount));
-
-        CandidateCount = candidateCount;
-        ClearSelectedCandidate();
-    }
-
-    internal void SetSelectedCandidate(
-        int selectedCandidateOffset,
-        int selectedTileIndex)
-    {
-        if (selectedCandidateOffset < 0)
-            throw new ArgumentOutOfRangeException(nameof(selectedCandidateOffset));
-
-        if (selectedTileIndex < 0)
-            throw new ArgumentOutOfRangeException(nameof(selectedTileIndex));
-
-        SelectedCandidateOffset = selectedCandidateOffset;
-        SelectedTileIndex = selectedTileIndex;
+        if (Candidates is SimulationCandidateSet<int> tileCandidates)
+            tileCandidates.SetSelectedOffset(selectedCandidateOffset);
+        else if (Candidates is SimulationCandidateSet<Behaviour> behaviourCandidates)
+            behaviourCandidates.SetSelectedOffset(selectedCandidateOffset);
+        else
+            throw new InvalidOperationException("Current simulation candidate container is unsupported.");
     }
 
     internal void ClearSelectedCandidate()
     {
-        SelectedCandidateOffset = -1;
-        SelectedTileIndex = -1;
+        Candidates.ClearSelected();
     }
 
     internal void MarkSuccess()
@@ -169,4 +187,19 @@ public sealed class SimulationContext
     }
 
     #endregion
+
+    private static ISimulationCandidateSet CreateCandidates(
+        SimulationCandidateMode candidateMode,
+        int tileCandidateCapacity)
+    {
+        return candidateMode switch
+        {
+            SimulationCandidateMode.Tile => new SimulationCandidateSet<int>(
+                SimulationCandidateMode.Tile,
+                tileCandidateCapacity),
+            SimulationCandidateMode.Behaviour => new SimulationCandidateSet<Behaviour>(
+                SimulationCandidateMode.Behaviour),
+            _ => throw new ArgumentOutOfRangeException(nameof(candidateMode)),
+        };
+    }
 }
