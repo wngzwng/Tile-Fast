@@ -13,14 +13,12 @@ internal static class Program
         var runner = new SimulationRunner();
         var random = new Random(20260626);
 
-        var runMetrics = runner.SimulateOne(levelCore, random);
         var batchMetrics = runner.SimulateMany(
             levelCore,
             simulationCount: 1000,
             random);
 
         Console.WriteLine(levelCore.ToString(multiline: true));
-        Console.WriteLine(runMetrics);
         Console.WriteLine(batchMetrics);
     }
 }

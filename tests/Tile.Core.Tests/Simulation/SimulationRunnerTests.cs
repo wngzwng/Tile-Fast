@@ -9,25 +9,28 @@ namespace Tile.Core.Tests.Simulation;
 public sealed class SimulationRunnerTests
 {
     [Test]
-    public void SimulateOne_WhenLevelCanBeCleared_ReturnsSuccess()
+    public void SimulateMany_WithSingleRun_WhenLevelCanBeCleared_ReturnsSuccess()
     {
         var level = CreateSingleMatchLevel();
         var runner = new SimulationRunner();
 
-        var metrics = runner.SimulateOne(level, new Random(123));
+        var metrics = runner.SimulateMany(level, simulationCount: 1, new Random(123));
 
-        Assert.That(metrics.IsFailed, Is.False);
-        Assert.That(metrics.FailPosition, Is.EqualTo(-1));
+        Assert.That(metrics.TotalCount, Is.EqualTo(1));
+        Assert.That(metrics.SuccessCount, Is.EqualTo(1));
+        Assert.That(metrics.FailureCount, Is.Zero);
+        Assert.That(metrics.FailureRate, Is.EqualTo(0.0));
+        Assert.That(metrics.AverageFailPosition, Is.EqualTo(-1.0));
     }
 
     [Test]
-    public void SimulateOne_DoesNotMutateOriginalLevel()
+    public void SimulateMany_DoesNotMutateOriginalLevel()
     {
         var level = CreateSingleMatchLevel();
         var before = level.Serialize();
         var runner = new SimulationRunner();
 
-        _ = runner.SimulateOne(level, new Random(123));
+        _ = runner.SimulateMany(level, simulationCount: 1, new Random(123));
 
         Assert.That(level.Serialize(), Is.EqualTo(before));
         Assert.That(level.Pasture.PresentTiles.Count(), Is.EqualTo(3));
@@ -36,15 +39,18 @@ public sealed class SimulationRunnerTests
     }
 
     [Test]
-    public void SimulateOne_WhenStagingAreaIsFull_ReturnsFailureAtCurrentMoveCount()
+    public void SimulateMany_WithSingleRun_WhenStagingAreaIsFull_ReturnsFailureAtCurrentMoveCount()
     {
         var level = CreateFullStagingFailureLevel();
         var runner = new SimulationRunner();
 
-        var metrics = runner.SimulateOne(level, new Random(123));
+        var metrics = runner.SimulateMany(level, simulationCount: 1, new Random(123));
 
-        Assert.That(metrics.IsFailed, Is.True);
-        Assert.That(metrics.FailPosition, Is.Zero);
+        Assert.That(metrics.TotalCount, Is.EqualTo(1));
+        Assert.That(metrics.SuccessCount, Is.Zero);
+        Assert.That(metrics.FailureCount, Is.EqualTo(1));
+        Assert.That(metrics.FailureRate, Is.EqualTo(1.0));
+        Assert.That(metrics.AverageFailPosition, Is.EqualTo(0.0));
     }
 
     [Test]
@@ -85,6 +91,74 @@ public sealed class SimulationRunnerTests
 
         Assert.Throws<ArgumentOutOfRangeException>(() => runner.SimulateMany(level, simulationCount: 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => runner.SimulateMany(level, simulationCount: -1));
+    }
+
+    [Test]
+    public void SimulateMany_WithHooks_InvokesLifecycleAndExposesMetricBags()
+    {
+        var level = CreateSingleMatchLevel();
+        var runner = new SimulationRunner();
+        var hook = new RecordingSimulationHook();
+
+        var metrics = runner.SimulateMany(
+            level,
+            simulationCount: 1,
+            new Random(123),
+            [hook]);
+
+        Assert.That(metrics.SuccessCount, Is.EqualTo(1));
+        Assert.That(
+            hook.Events,
+            Is.EqualTo(new[]
+            {
+                "batch-start:-1",
+                "run-start:0",
+                "step-before:0:0:3",
+                "behaviour-before:0:0:3:2",
+                "behaviour-after:0:1:3:2",
+                "step-after:0:1:3",
+                "step-before:0:1:2",
+                "behaviour-before:0:1:2:1",
+                "behaviour-after:0:2:2:1",
+                "step-after:0:2:2",
+                "step-before:0:2:1",
+                "behaviour-before:0:2:1:0",
+                "behaviour-after:0:3:1:0",
+                "step-after:0:3:1",
+                "run-end:0:False",
+                "batch-end:1:1"
+            }));
+    }
+
+    [Test]
+    public void SimulateMany_UsesInjectedFinderAndScorer()
+    {
+        var level = CreateSingleMatchLevel();
+        var finder = new RecordingCandidateFinder();
+        var scorer = new FirstCandidateScorer();
+        var hook = new RecordingSimulationHook();
+        var runner = new SimulationRunner(finder, scorer);
+
+        var metrics = runner.SimulateMany(
+            level,
+            simulationCount: 1,
+            new Random(123),
+            [hook]);
+
+        Assert.That(metrics.SuccessCount, Is.EqualTo(1));
+        Assert.That(finder.CallCount, Is.EqualTo(3));
+        Assert.That(scorer.CallCount, Is.EqualTo(3));
+        Assert.That(scorer.CandidateCounts, Is.EqualTo(new[] { 3, 2, 1 }));
+        Assert.That(hook.CandidateModes, Is.EqualTo(new[] { SimulationCandidateMode.Tile }));
+    }
+
+    [Test]
+    public void Constructor_WhenFinderAndScorerCandidateModesDiffer_Throws()
+    {
+        var finder = new RecordingCandidateFinder(SimulationCandidateMode.Tile);
+        var scorer = new FirstCandidateScorer(SimulationCandidateMode.Behaviour);
+
+        Assert.Throws<ArgumentException>(() => new SimulationRunner(finder, scorer));
     }
 
     [Test]
@@ -210,5 +284,111 @@ public sealed class SimulationRunnerTests
     {
         level.Pasture.Lift(tileIndex);
         level.StagingArea.Enter(tileIndex);
+    }
+
+    private sealed class RecordingSimulationHook : SimulationHookBase
+    {
+        public List<string> Events { get; } = [];
+
+        public List<SimulationCandidateMode> CandidateModes { get; } = [];
+
+        public override void OnBatchStart(SimulationContext context)
+        {
+            Events.Add($"batch-start:{context.SimulationIndex}");
+        }
+
+        public override void OnBatchEnd(SimulationContext context, ref MetricBag aggBag)
+        {
+            Events.Add(
+                $"batch-end:{context.SimulationNumber}:{aggBag.GetOrDefault(SimulationBatchMetricKeys.SuccessCount)}");
+        }
+
+        public override void OnRunStart(SimulationContext context, ref MetricBag runBag)
+        {
+            Events.Add($"run-start:{context.SimulationIndex}");
+            CandidateModes.Add(context.CandidateMode);
+        }
+
+        public override void OnStepBefore(SimulationContext context, ref MetricBag runBag)
+        {
+            Events.Add(
+                $"step-before:{context.SimulationIndex}:{context.MoveCount}:{context.CandidateCount}");
+        }
+
+        public override void OnBehaviourBefore(SimulationContext context, ref MetricBag runBag)
+        {
+            Events.Add(
+                $"behaviour-before:{context.SimulationIndex}:{context.MoveCount}:{context.CandidateCount}:{context.SelectedTileIndex}");
+        }
+
+        public override void OnBehaviourAfter(SimulationContext context, ref MetricBag runBag)
+        {
+            Events.Add(
+                $"behaviour-after:{context.SimulationIndex}:{context.MoveCount}:{context.CandidateCount}:{context.SelectedTileIndex}");
+        }
+
+        public override void OnStepAfter(SimulationContext context, ref MetricBag runBag)
+        {
+            Events.Add(
+                $"step-after:{context.SimulationIndex}:{context.MoveCount}:{context.CandidateCount}");
+        }
+
+        public override void OnRunEnd(SimulationContext context, ref MetricBag runBag)
+        {
+            Events.Add(
+                $"run-end:{context.SimulationIndex}:{runBag.GetOrDefault(SimulationRunMetricKeys.IsFailed)}");
+        }
+    }
+
+    private sealed class RecordingCandidateFinder : ISimulationCandidateFinder
+    {
+        private readonly SimulationCandidateMode _candidateMode;
+
+        public RecordingCandidateFinder(
+            SimulationCandidateMode candidateMode = SimulationCandidateMode.Tile)
+        {
+            _candidateMode = candidateMode;
+        }
+
+        public int CallCount { get; private set; }
+
+        public SimulationCandidateMode CandidateMode => _candidateMode;
+
+        public int FindCandidates(
+            SimulationContext context,
+            Span<int> candidateBuffer)
+        {
+            CallCount++;
+
+            return context.SourceLevel.Pasture.SelectableTiles.CopyTo(candidateBuffer);
+        }
+    }
+
+    private sealed class FirstCandidateScorer : ISimulationCandidateScorer
+    {
+        private readonly SimulationCandidateMode _candidateMode;
+
+        public FirstCandidateScorer(
+            SimulationCandidateMode candidateMode = SimulationCandidateMode.Tile)
+        {
+            _candidateMode = candidateMode;
+        }
+
+        public int CallCount { get; private set; }
+
+        public SimulationCandidateMode CandidateMode => _candidateMode;
+
+        public List<int> CandidateCounts { get; } = [];
+
+        public int SelectCandidateOffset(
+            SimulationContext context,
+            ReadOnlySpan<int> candidateBuffer,
+            int candidateCount)
+        {
+            CallCount++;
+            CandidateCounts.Add(candidateCount);
+
+            return 0;
+        }
     }
 }

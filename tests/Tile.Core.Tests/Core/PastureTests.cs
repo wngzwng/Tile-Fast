@@ -1,4 +1,5 @@
 using NUnit.Framework;
+using Tile.Core.Common.BitSet;
 using Tile.Core.Core;
 using Tile.Core.Core.Mapping;
 using Tile.Core.Core.Types;
@@ -65,6 +66,7 @@ public sealed class PastureTests
             CreateTile(0, (0, 0, 0).PackXyz())
         ]);
 
+        Assert.That(pasture.GetExposedArea(0), Is.EqualTo(4));
         Assert.That(pasture.IsVisible(0), Is.True);
         Assert.That(pasture.IsSelectable(0), Is.True);
     }
@@ -78,6 +80,7 @@ public sealed class PastureTests
             CreateTile(1, (1, 0, 1).PackXyz())
         ]);
 
+        Assert.That(pasture.GetExposedArea(0), Is.EqualTo(2));
         Assert.That(pasture.IsVisible(0), Is.True);
         Assert.That(pasture.IsSelectable(0), Is.False);
         Assert.That(pasture.IsVisible(1), Is.True);
@@ -93,10 +96,213 @@ public sealed class PastureTests
             CreateTile(1, (0, 0, 1).PackXyz())
         ]);
 
+        Assert.That(pasture.GetExposedArea(0), Is.Zero);
         Assert.That(pasture.IsVisible(0), Is.False);
         Assert.That(pasture.IsSelectable(0), Is.False);
         Assert.That(pasture.IsVisible(1), Is.True);
         Assert.That(pasture.IsSelectable(1), Is.True);
+    }
+
+    [Test]
+    public void GetUpperCoverTileBits_ReturnsDistinctCoverTiles()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (0, 0, 1).PackXyz())
+        ]);
+
+        ulong[] coverTileBits = [ulong.MaxValue];
+
+        var coverTileCount = pasture.GetUpperCoverTileBits(0, coverTileBits);
+
+        Assert.That(coverTileCount, Is.EqualTo(1));
+        Assert.That(BitSetOperations.Get(coverTileBits, 1), Is.True);
+        Assert.That(BitSetOperations.Get(coverTileBits, 0), Is.False);
+    }
+
+    [Test]
+    public void SimulateState_WhenUpperCoverIgnored_HitsHigherCover()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (0, 0, 1).PackXyz()),
+            CreateTile(2, (0, 0, 2).PackXyz())
+        ]);
+
+        ulong[] ignoredTileBits = [0UL];
+        BitSetOperations.Set(ignoredTileBits, 1);
+
+        pasture.SimulateState(
+            0,
+            ignoredTileBits,
+            out var visible,
+            out var selectable);
+
+        Assert.That(visible, Is.False);
+        Assert.That(selectable, Is.False);
+    }
+
+    [Test]
+    public void SimulateUpperCoverTileBits_WhenMiddleCoverIgnored_HitsHigherCover()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (0, 0, 1).PackXyz()),
+            CreateTile(2, (0, 0, 2).PackXyz())
+        ]);
+
+        ulong[] ignoredTileBits = [0UL];
+        BitSetOperations.Set(ignoredTileBits, 1);
+
+        ulong[] realCoverTileBits = [0UL];
+        ulong[] simulatedCoverTileBits = [0UL];
+
+        var realCoverTileCount = pasture.GetUpperCoverTileBits(0, realCoverTileBits);
+        var simulatedCoverTileCount = pasture.SimulateUpperCoverTileBits(
+            0,
+            ignoredTileBits,
+            simulatedCoverTileBits);
+
+        Assert.That(realCoverTileCount, Is.EqualTo(1));
+        Assert.That(BitSetOperations.Get(realCoverTileBits, 1), Is.True);
+        Assert.That(simulatedCoverTileCount, Is.EqualTo(1));
+        Assert.That(BitSetOperations.Get(simulatedCoverTileBits, 2), Is.True);
+        Assert.That(BitSetOperations.Get(simulatedCoverTileBits, 1), Is.False);
+    }
+
+    [Test]
+    public void GetLowerCoveredTileBits_WhenNoLowerTile_ReturnsZeroAndClearsBuffer()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz())
+        ]);
+
+        ulong[] coveredTileBits = [ulong.MaxValue];
+
+        var coveredTileCount = pasture.GetLowerCoveredTileBits(0, coveredTileBits);
+
+        Assert.That(coveredTileCount, Is.Zero);
+        Assert.That(coveredTileBits[0], Is.Zero);
+    }
+
+    [Test]
+    public void GetLowerCoveredTileBits_ReturnsDistinctCoveredTiles()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (0, 0, 1).PackXyz())
+        ]);
+
+        ulong[] coveredTileBits = [ulong.MaxValue];
+
+        var coveredTileCount = pasture.GetLowerCoveredTileBits(1, coveredTileBits);
+
+        Assert.That(coveredTileCount, Is.EqualTo(1));
+        Assert.That(BitSetOperations.Get(coveredTileBits, 0), Is.True);
+        Assert.That(BitSetOperations.Get(coveredTileBits, 1), Is.False);
+    }
+
+    [Test]
+    public void GetLowerCoveredTileBits_WhenMiddleLayerMissing_HitsLowerTile()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (0, 0, 1).PackXyz()),
+            CreateTile(2, (0, 0, 2).PackXyz())
+        ]);
+
+        pasture.Lift(1);
+
+        ulong[] coveredTileBits = [0UL];
+
+        var coveredTileCount = pasture.GetLowerCoveredTileBits(2, coveredTileBits);
+
+        Assert.That(coveredTileCount, Is.EqualTo(1));
+        Assert.That(BitSetOperations.Get(coveredTileBits, 0), Is.True);
+        Assert.That(BitSetOperations.Get(coveredTileBits, 1), Is.False);
+    }
+
+    [Test]
+    public void SimulateLowerCoveredTileBits_WhenMiddleCoveredIgnored_HitsLowerCovered()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (0, 0, 1).PackXyz()),
+            CreateTile(2, (0, 0, 2).PackXyz())
+        ]);
+
+        ulong[] ignoredTileBits = [0UL];
+        BitSetOperations.Set(ignoredTileBits, 1);
+
+        ulong[] realCoveredTileBits = [0UL];
+        ulong[] simulatedCoveredTileBits = [0UL];
+
+        var realCoveredTileCount = pasture.GetLowerCoveredTileBits(2, realCoveredTileBits);
+        var simulatedCoveredTileCount = pasture.SimulateLowerCoveredTileBits(
+            2,
+            ignoredTileBits,
+            simulatedCoveredTileBits);
+
+        Assert.That(realCoveredTileCount, Is.EqualTo(1));
+        Assert.That(BitSetOperations.Get(realCoveredTileBits, 1), Is.True);
+        Assert.That(simulatedCoveredTileCount, Is.EqualTo(1));
+        Assert.That(BitSetOperations.Get(simulatedCoveredTileBits, 0), Is.True);
+        Assert.That(BitSetOperations.Get(simulatedCoveredTileBits, 1), Is.False);
+    }
+
+    [Test]
+    public void SimulateAffectedTileBits_WhenMiddleCoveredIgnored_HitsLowerAffected()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (0, 0, 1).PackXyz()),
+            CreateTile(2, (0, 0, 2).PackXyz())
+        ]);
+
+        ulong[] ignoredTileBits = [0UL];
+        BitSetOperations.Set(ignoredTileBits, 1);
+
+        ulong[] affectedTileBits = [0UL];
+
+        var affectedTileCount = pasture.SimulateAffectedTileBits(
+            2,
+            ignoredTileBits,
+            affectedTileBits);
+
+        Assert.That(affectedTileCount, Is.EqualTo(1));
+        Assert.That(BitSetOperations.Get(affectedTileBits, 0), Is.True);
+        Assert.That(BitSetOperations.Get(affectedTileBits, 1), Is.False);
+    }
+
+    [Test]
+    public void SimulateAffectedTileBits_WhenClassicRule_IncludesSideNeighbors()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (2, 0, 0).PackXyz()),
+            CreateTile(2, (4, 0, 0).PackXyz())
+        ],
+            LevelRuleSpec.PairClassic);
+
+        ulong[] affectedTileBits = [0UL];
+
+        var affectedTileCount = pasture.SimulateAffectedTileBits(
+            1,
+            ignoredTileBits: default,
+            affectedTileBits);
+
+        Assert.That(affectedTileCount, Is.EqualTo(2));
+        Assert.That(BitSetOperations.Get(affectedTileBits, 0), Is.True);
+        Assert.That(BitSetOperations.Get(affectedTileBits, 2), Is.True);
     }
 
     [Test]
@@ -137,6 +343,27 @@ public sealed class PastureTests
     }
 
     [Test]
+    public void Lift_WhenMiddleLayerAlreadyMissing_RefreshesLowerDynamicHit()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (0, 0, 1).PackXyz()),
+            CreateTile(2, (0, 0, 2).PackXyz())
+        ]);
+
+        pasture.Lift(1);
+
+        Assert.That(pasture.IsVisible(0), Is.False);
+        Assert.That(pasture.IsSelectable(0), Is.False);
+
+        pasture.Lift(2);
+
+        Assert.That(pasture.IsVisible(0), Is.True);
+        Assert.That(pasture.IsSelectable(0), Is.True);
+    }
+
+    [Test]
     public void Reset_RestoresInitialPresentVisibleAndSelectableState()
     {
         var pasture = CreatePasture(
@@ -172,8 +399,14 @@ public sealed class PastureTests
         ],
             LevelRuleSpec.PairClassic);
 
+        Span<int> neighbors = stackalloc int[4];
+
         Assert.That(pasture.IsVisible(1), Is.True);
         Assert.That(pasture.IsSelectable(1), Is.False);
+        Assert.That(pasture.HasPresentNeighbor(1, NeighborDirEnum.Left), Is.True);
+        Assert.That(pasture.HasPresentNeighbor(1, NeighborDirEnum.Right), Is.True);
+        Assert.That(pasture.GetPresentNeighbors(1, NeighborDirEnum.Left, neighbors), Is.EqualTo(1));
+        Assert.That(neighbors[0], Is.EqualTo(0));
     }
 
     [Test]
@@ -191,6 +424,80 @@ public sealed class PastureTests
 
         Assert.That(pasture.IsVisible(1), Is.True);
         Assert.That(pasture.IsSelectable(1), Is.True);
+        Assert.That(pasture.HasPresentNeighbor(1, NeighborDirEnum.Left), Is.False);
+        Assert.That(pasture.HasPresentNeighbor(1, NeighborDirEnum.Right), Is.True);
+    }
+
+    [Test]
+    public void SimulateState_WhenUpperCoverIgnored_MakesCoveredTileVisibleAndSelectable()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (0, 0, 1).PackXyz())
+        ]);
+
+        ulong[] ignoredTileBits = [0UL];
+        BitSetOperations.Set(ignoredTileBits, 1);
+
+        pasture.SimulateState(
+            0,
+            ignoredTileBits,
+            out var visible,
+            out var selectable);
+
+        Assert.That(visible, Is.True);
+        Assert.That(selectable, Is.True);
+        Assert.That(pasture.IsVisible(0), Is.False);
+        Assert.That(pasture.IsSelectable(0), Is.False);
+    }
+
+    [Test]
+    public void SimulateState_WhenClassicSideNeighborIgnored_MakesTileSelectable()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz()),
+            CreateTile(1, (2, 0, 0).PackXyz()),
+            CreateTile(2, (4, 0, 0).PackXyz())
+        ],
+            LevelRuleSpec.PairClassic);
+
+        ulong[] ignoredTileBits = [0UL];
+        BitSetOperations.Set(ignoredTileBits, 0);
+
+        pasture.SimulateState(
+            1,
+            ignoredTileBits,
+            out var visible,
+            out var selectable);
+
+        Assert.That(visible, Is.True);
+        Assert.That(selectable, Is.True);
+        Assert.That(pasture.IsSelectable(1), Is.False);
+    }
+
+    [Test]
+    public void SimulateState_WhenTileItselfIgnored_ReturnsNotVisibleAndNotSelectable()
+    {
+        var pasture = CreatePasture(
+        [
+            CreateTile(0, (0, 0, 0).PackXyz())
+        ]);
+
+        ulong[] ignoredTileBits = [0UL];
+        BitSetOperations.Set(ignoredTileBits, 0);
+
+        pasture.SimulateState(
+            0,
+            ignoredTileBits,
+            out var visible,
+            out var selectable);
+
+        Assert.That(visible, Is.False);
+        Assert.That(selectable, Is.False);
+        Assert.That(pasture.IsVisible(0), Is.True);
+        Assert.That(pasture.IsSelectable(0), Is.True);
     }
 
     private static Pasture CreatePasture(

@@ -63,7 +63,7 @@ public sealed class StagingArea
 
     #endregion
 
-    #region Construction
+    #region Object Basics
 
     /// <summary>
     /// 创建卡槽区。
@@ -107,6 +107,46 @@ public sealed class StagingArea
         _suitCounts = suitCounts ?? throw new ArgumentNullException(nameof(suitCounts));
     }
 
+    /// <summary>
+    /// 清空卡槽状态，容量保持不变。
+    /// </summary>
+    public void Reset()
+    {
+        _tiles.AsSpan(0, _count).Clear();
+        _suitCounts.AsSpan().Clear();
+        _count = 0;
+        _suitBits = 0UL;
+    }
+
+    /// <summary>
+    /// 创建当前卡槽状态的独立副本。
+    /// </summary>
+    public StagingArea Clone()
+    {
+        return new StagingArea(
+            _mapping,
+            _matchRequireCount,
+            (int[])_tiles.Clone(),
+            _count,
+            _suitBits,
+            (byte[])_suitCounts.Clone());
+    }
+
+    /// <summary>
+    /// 返回卡槽当前状态摘要。
+    /// </summary>
+    public override string ToString()
+    {
+        return $"StagingArea(" +
+               $"Used={UsedCapacity}/{Capacity}, " +
+               $"Available={AvailableCapacity}, " +
+               $"IsFull={IsFull}, " +
+               $"IsEmpty={IsEmpty}, " +
+               $"Tiles=[{FormatTiles()}], " +
+               $"SuitBits={SuitBits}, " +
+               $"SuitCounts=[{FormatSuitCounts()}])";
+    }
+
     #endregion
 
     #region Capacity Actions
@@ -125,21 +165,6 @@ public sealed class StagingArea
             return;
 
         Array.Resize(ref _tiles, capacity);
-    }
-
-    #endregion
-
-    #region State Actions
-
-    /// <summary>
-    /// 清空卡槽状态，容量保持不变。
-    /// </summary>
-    public void Reset()
-    {
-        _tiles.AsSpan(0, _count).Clear();
-        _suitCounts.AsSpan().Clear();
-        _count = 0;
-        _suitBits = 0UL;
     }
 
     #endregion
@@ -288,23 +313,7 @@ public sealed class StagingArea
 
     #endregion
 
-    #region Validation
-
-    private void ValidateTileIndex(int tileIndex)
-    {
-        if ((uint)tileIndex >= (uint)_mapping.TileCount)
-            throw new ArgumentOutOfRangeException(nameof(tileIndex));
-    }
-
-    private static void ValidateSuit(int suit)
-    {
-        if ((uint)suit >= Tile.MaxSuitCount)
-            throw new ArgumentOutOfRangeException(nameof(suit));
-    }
-
-    #endregion
-
-    #region Order Helpers
+    #region Stable Core Semantics
 
     private int FindInsertIndexBySuit(int suit)
     {
@@ -331,10 +340,6 @@ public sealed class StagingArea
         _count--;
     }
 
-    #endregion
-
-    #region Suit State Helpers
-
     private void AddSuit(int suit)
     {
         if (_suitCounts[suit] == 0)
@@ -349,25 +354,6 @@ public sealed class StagingArea
 
         if (_suitCounts[suit] == 0)
             _suitBits &= ~(1UL << suit);
-    }
-
-    #endregion
-
-    #region Formatting
-
-    /// <summary>
-    /// 返回卡槽当前状态摘要。
-    /// </summary>
-    public override string ToString()
-    {
-        return $"StagingArea(" +
-               $"Used={UsedCapacity}/{Capacity}, " +
-               $"Available={AvailableCapacity}, " +
-               $"IsFull={IsFull}, " +
-               $"IsEmpty={IsEmpty}, " +
-               $"Tiles=[{FormatTiles()}], " +
-               $"SuitBits={SuitBits}, " +
-               $"SuitCounts=[{FormatSuitCounts()}])";
     }
 
     private string FormatTiles()
@@ -409,20 +395,24 @@ public sealed class StagingArea
 
     #endregion
 
-    #region Clone
+    #region Validation
 
     /// <summary>
-    /// 创建当前卡槽状态的独立副本。
+    /// 验证 tileIndex 是否位于当前映射表范围内。
     /// </summary>
-    public StagingArea Clone()
+    private void ValidateTileIndex(int tileIndex)
     {
-        return new StagingArea(
-            _mapping,
-            _matchRequireCount,
-            (int[])_tiles.Clone(),
-            _count,
-            _suitBits,
-            (byte[])_suitCounts.Clone());
+        if ((uint)tileIndex >= (uint)_mapping.TileCount)
+            throw new ArgumentOutOfRangeException(nameof(tileIndex));
+    }
+
+    /// <summary>
+    /// 验证 suit 是否位于合法花色范围内。
+    /// </summary>
+    private static void ValidateSuit(int suit)
+    {
+        if ((uint)suit >= Tile.MaxSuitCount)
+            throw new ArgumentOutOfRangeException(nameof(suit));
     }
 
     #endregion

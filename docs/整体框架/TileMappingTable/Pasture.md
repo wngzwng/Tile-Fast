@@ -191,49 +191,63 @@ private void RefreshOne(int tileIndex);
 private void RefreshAffected(int tileIndex);
 ```
 
-`TileMappingTable.GetAffectedTileBits(tileIndex)` 可以作为受影响集合的基础来源。
+受影响集合由 `Pasture` 基于当前 `_present`、上下遮挡关系和锁定规则即时收集。
 
-## 6. TileMappingTable 的静态邻居查询
+## 6. Pasture 的当前在场邻居查询
 
 ### 6.1 分层原则
 
-邻居关系要分成两层：
+邻居关系现在收敛到 `Pasture` 内部计算：
 
 ```text
-TileMappingTable  静态邻居候选：空间布局上相邻的是谁
-Pasture           动态在场邻居：当前局面下仍 present 的邻居是谁
+TileMappingTable  只提供 position -> tileIndex 等静态空间索引
+Pasture           基于静态索引和 _present 计算当前在场邻居
 ```
 
-`TileMappingTable` 不应该知道 `_present`，所以它不能回答“当前有没有邻居”。
+`TileMappingTable` 不知道 `_present`，也不再提供静态邻居候选 API。
 
-它只能回答：
-
-```text
-按关卡静态空间布局，这个方向上有哪些邻居候选。
-```
-
-`Pasture` 再结合 `_present` 过滤：
+`Pasture` 在查询邻居时直接完成两件事：
 
 ```text
-这些候选邻居里，哪些当前仍然在场。
+1. 按方向推导需要检查的空间坐标。
+2. 通过 TileMappingTable 的位置索引查命中的 Tile。
+3. 结合 _present / ignoredTileBits 过滤掉当前不在场的 Tile。
 ```
 
 一句话：
 
 ```text
-TileMappingTable 回答：空间上是谁？
-Pasture 回答：现在还算不算？
+TileMappingTable 回答：这个坐标上是谁？
+Pasture 回答：这个方向上现在还有没有有效邻居？
 ```
 
-### 6.2 静态邻居定义
+这样可以避免在 `TileMappingTable` 中沉淀一套只服务当前盘面语义的邻居 API，也避免静态候选和动态在场过滤在两个对象之间来回传递。
 
-给定一个 Tile 和一个方向，邻居查询的语义是：
+### 6.2 当前在场邻居定义
+
+给定一个 Tile 和一个方向，当前在场邻居查询的语义是：
 
 ```text
 1. 取 Tile 在指定方向上的面坐标组。
 2. 将这一组面坐标整体向指定方向推进一格。
 3. 查询这些坐标上命中的 Tile。
-4. 去重后得到指定方向的邻居集合。
+4. 去重。
+5. 只保留当前有效在场的 Tile。
+```
+
+其中“有效在场”由 `Pasture` 判断：
+
+```csharp
+private bool IsEffectivelyPresent(
+    int tileIndex,
+    ReadOnlySpan<ulong> ignoredTileBits);
+```
+
+它同时服务真实盘面查询和模拟查询：
+
+```text
+真实盘面：只看 _present。
+模拟盘面：看 _present，并额外排除 ignoredTileBits。
 ```
 
 例如左邻居：
@@ -260,31 +274,27 @@ Pasture 回答：现在还算不算？
 查找命中的 Tile
 ```
 
-### 6.3 TileMappingTable 推荐 API
+### 6.3 Pasture 推荐 API
 
-`TileMappingTable` 提供静态邻居候选查询：
+`Pasture` 提供当前在场邻居查询：
 
 ```csharp
-public bool HasNeighbor(
+public bool HasPresentNeighbor(
     int tileIndex,
     NeighborDir dir);
 
-public int GetNeighborCount(
-    int tileIndex,
-    NeighborDir dir);
-
-public int GetNeighbors(
+public int GetPresentNeighbors(
     int tileIndex,
     NeighborDir dir,
     Span<int> buffer);
 ```
 
-其中核心方法是 `GetNeighbors`。
+其中核心方法是 `GetPresentNeighbors`。
 
 语义：
 
 ```text
-把指定方向上的静态邻居候选去重后写入 buffer。
+把指定方向上当前仍有效在场的邻居去重后写入 buffer。
 返回写入数量。
 ```
 
@@ -293,56 +303,70 @@ public int GetNeighbors(
 - 不分配 `List`。
 - 不返回 `IEnumerable`。
 - 不在热路径使用 LINQ。
-- 不判断 `Present`。
+- 必须判断 `_present`。
 - 不判断 `Visible`。
 - 不判断 `Selectable`。
 - 默认 Tile 体积下，单方向邻居数量通常很小，适合 `stackalloc`。
 
-### 6.4 GetNeighbors 实现思路
+### 6.4 GetPresentNeighbors 实现思路
 
 不要使用 `EnumerateNeighborFacePositions` / `yield return` 这类枚举器式实现。
 
-推荐直接在 `GetNeighbors` 内按方向展开循环：
+推荐在 `Pasture` 内分成两步：
+
+```text
+GetNeighborCandidates  负责按方向查坐标命中的候选 Tile
+GetPresentNeighbors   负责用 IsEffectivelyPresent 过滤候选
+```
+
+示意：
 
 ```csharp
-public int GetNeighbors(
+private int GetPresentNeighbors(
+    int tileIndex,
+    NeighborDir dir,
+    ReadOnlySpan<ulong> ignoredTileBits,
+    Span<int> buffer)
+{
+    ValidateTileIndex(tileIndex);
+    ValidateIgnoredTileBits(ignoredTileBits);
+
+    Span<int> candidates = stackalloc int[4];
+
+    var candidateCount = GetNeighborCandidates(
+        tileIndex,
+        dir,
+        candidates);
+
+    var count = 0;
+
+    for (var i = 0; i < candidateCount; i++)
+    {
+        var candidate = candidates[i];
+
+        if (!IsEffectivelyPresent(candidate, ignoredTileBits))
+            continue;
+
+        buffer[count++] = candidate;
+    }
+
+    return count;
+}
+```
+
+候选收集仍然按方向展开，并通过 `_mapping.TryGetTileIndexAtPosition` 查询坐标命中：
+
+```csharp
+private int GetNeighborCandidates(
     int tileIndex,
     NeighborDir dir,
     Span<int> buffer)
 {
-    ValidateTileIndex(tileIndex);
-
-    var tile = _tiles[tileIndex];
-    var (x0, y0, z0) = tile.Position.UnpackXyz();
-    var (dx, dy, dz) = tile.Volume.UnpackXyz();
-
-    var write = 0;
-
-    void TryAddAt(int x, int y, int z)
-    {
-        if (!IsInside(x, y, z))
-            return;
-
-        var position = (x, y, z).PackXyz();
-
-        if (!TryGetTileIndexAtPosition(position, out var neighborIndex))
-            return;
-
-        if (neighborIndex == tileIndex)
-            return;
-
-        if (Contains(buffer, write, neighborIndex))
-            return;
-
-        if (write >= buffer.Length)
-            throw new ArgumentException("邻居缓冲区长度不足。", nameof(buffer));
-
-        buffer[write++] = neighborIndex;
-    }
-
     // 按 dir 展开 Left / Right / Front / Back / Up / Down。
+    // 每个坐标通过 _mapping.TryGetTileIndexAtPosition(position, out var tileIndex) 查询。
+    // 命中后去重写入 buffer。
 
-    return write;
+    return count;
 }
 ```
 
@@ -385,54 +409,6 @@ private static bool Contains(
 
 默认 Tile 单方向面点最多 4 个，线性去重比 `HashSet` 更适合热路径。
 
-### 6.5 Pasture 的动态邻居过滤
-
-`Pasture` 基于 `TileMappingTable.GetNeighbors` 提供当前在场邻居查询：
-
-```csharp
-public bool HasPresentNeighbor(
-    int tileIndex,
-    NeighborDir dir);
-
-public int GetPresentNeighborCount(
-    int tileIndex,
-    NeighborDir dir);
-
-public int GetPresentNeighbors(
-    int tileIndex,
-    NeighborDir dir,
-    Span<int> buffer);
-```
-
-实现关系：
-
-```csharp
-public int GetPresentNeighbors(
-    int tileIndex,
-    NeighborDir dir,
-    Span<int> buffer)
-{
-    Span<int> candidates = stackalloc int[4];
-
-    var candidateCount = _mapping.GetNeighbors(
-        tileIndex,
-        dir,
-        candidates);
-
-    var write = 0;
-
-    for (var i = 0; i < candidateCount; i++)
-    {
-        var candidate = candidates[i];
-
-        if (IsPresent(candidate))
-            buffer[write++] = candidate;
-    }
-
-    return write;
-}
-```
-
 Classic 左右判断只需要“有没有”：
 
 ```csharp
@@ -452,19 +428,16 @@ var rightBlocked = HasPresentNeighbor(tileIndex, NeighborDir.Right);
 
 这里必须结合 `_present`，所以最终结果应由 `Pasture` 计算。
 
-`TileMappingTable` 可以提供静态上邻居候选：
+`Pasture` 可以通过当前在场邻居查询获得直接上方依赖：
 
 ```csharp
-_mapping.GetNeighbors(tileIndex, NeighborDir.Up, buffer);
+GetPresentNeighbors(tileIndex, NeighborDir.Up, buffer);
 ```
 
-但 `Pasture` 必须过滤：
+模拟视角下则使用带 `ignoredTileBits` 的内部重载：
 
 ```csharp
-if (IsPresent(candidate))
-{
-    // candidate 才是当前局面下真实存在的上方依赖。
-}
+GetPresentNeighbors(tileIndex, NeighborDir.Up, ignoredTileBits, buffer);
 ```
 
 ### 7.2 上方依赖闭包
@@ -481,7 +454,7 @@ if (IsPresent(candidate))
 正确归属：
 
 ```text
-TileMappingTable  提供静态上邻居候选
+TileMappingTable  提供坐标到 Tile 的静态索引
 Pasture           基于 _present 计算动态上方依赖闭包
 ```
 
@@ -534,10 +507,10 @@ public void CollectPresentUpperClosure(
 `PushPresentUpperNeighbors` 内部调用：
 
 ```csharp
-_mapping.GetNeighbors(tileIndex, NeighborDir.Up, candidates);
+GetPresentNeighbors(tileIndex, NeighborDir.Up, candidates);
 ```
 
-然后用 `IsPresent` 过滤。
+当前在场过滤由 `GetPresentNeighbors` 内部完成。
 
 ## 8. 推荐内部结构
 
@@ -570,7 +543,6 @@ Pasture
     ├── IsClassicRuleSelectable(tileIndex)
     ├── HasFreeHorizontalSide(tileIndex)
     ├── HasPresentNeighbor(tileIndex, dir)
-    ├── GetPresentNeighborCount(tileIndex, dir)
     ├── GetPresentNeighbors(tileIndex, dir, buffer)
     └── CollectPresentUpperClosure(tileIndex, resultBits)
 ```

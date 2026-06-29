@@ -59,7 +59,7 @@ public sealed class LevelCore
         var (dRow, dCol, dLayer) = PositionPacker.UnpackRcz(Tile.DefaultVolume);
         maxRow += dRow;
         maxCol += dCol;
-        maxLayer += dLayer;     
+        maxLayer += dLayer;
 
         Mapping = TileMappingTable.Create(
             tiles,
@@ -358,6 +358,16 @@ public sealed class LevelCore
     public void UnDoMove()
     {
         UndoMove();
+    }
+
+    public void Reset()
+    {
+        Pasture.Reset();
+        StagingArea.Reset();
+        Corral.Reset();
+
+        Array.Clear(_historyMoves);
+        _historyIndex = 0;
     }
 
     private LevelCore(

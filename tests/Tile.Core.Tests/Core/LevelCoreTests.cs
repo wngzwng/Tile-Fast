@@ -149,6 +149,31 @@ public sealed class LevelCoreTests
     }
 
     [Test]
+    public void Reset_RestoresInitialZonesAndClearsMoveHistory()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz(),
+                (2, 0, 0).PackXyz()
+            ],
+            suits: [1, 2]);
+
+        level.DoMove(new SelectMove(tileIndex: 0));
+
+        Assert.That(level.Pasture.IsPresent(0), Is.False);
+        Assert.That(level.StagingArea.Tiles.ToArray(), Is.EqualTo(new[] { 0 }));
+
+        level.Reset();
+
+        Assert.That(level.Pasture.IsPresent(0), Is.True);
+        Assert.That(level.Pasture.IsPresent(1), Is.True);
+        Assert.That(level.StagingArea.Tiles.ToArray(), Is.Empty);
+        Assert.That(level.Corral.Count, Is.Zero);
+        Assert.Throws<InvalidOperationException>(() => level.UndoMove());
+    }
+
+    [Test]
     public void Deserialize_CreatesEquivalentStateToConstructor()
     {
         int[] positions =
