@@ -28,7 +28,7 @@ public sealed class SimulationRunner
         var level = context.SourceLevel;
         while (true)
         {
-            if (level.Pasture.IsEmpty)
+            if (level.IsFinish())
             {
                 context.MarkSuccess();
 
@@ -46,12 +46,7 @@ public sealed class SimulationRunner
                     FailPosition: context.MoveCount);
             }
 
-            var candidates = context.TileCandidates;
-            var candidateCount = _candidateFinder.FindCandidates(
-                context,
-                candidates.MutableItems);
-
-            if (candidateCount == 0)
+            if (!TryExecuteStep(context, hooks, ref runBag))
             {
                 context.MarkFailure();
 
@@ -59,25 +54,61 @@ public sealed class SimulationRunner
                     IsFailed: true,
                     FailPosition: context.MoveCount);
             }
-
-            InvokeStepBeforeHooks(hooks, context, ref runBag);
-
-            var selectedCandidateOffset = _candidateScorer.SelectCandidateOffset(
-                context,
-                candidates.Items);
-            if ((uint)selectedCandidateOffset >= (uint)candidateCount)
-                throw new InvalidOperationException("Simulation candidate scorer returned an invalid candidate offset.");
-
-            context.SetSelectedCandidateOffset(selectedCandidateOffset);
-            var selectedCandidateValue = candidates.SelectedItem;
-
-            InvokeBehaviourBeforeHooks(hooks, context, ref runBag);
-            level.DoMove(new SelectMove(selectedCandidateValue));
-            context.IncreaseMoveCount();
-            InvokeBehaviourAfterHooks(hooks, context, ref runBag);
-
-            InvokeStepAfterHooks(hooks, context, ref runBag);
         }
+    }
+
+    private bool TryExecuteStep(
+        SimulationContext context,
+        IReadOnlyList<ISimulationHook> hooks,
+        ref MetricBag runBag)
+    {
+        switch (context.CandidateMode)
+        {
+            case SimulationCandidateMode.Tile:
+                return TryExecuteTileStep(
+                    context,
+                    hooks,
+                    ref runBag);
+            case SimulationCandidateMode.Behaviour:
+                throw new NotSupportedException("Behaviour candidate mode is not wired in SimulationRunner yet.");
+            default:
+                throw new InvalidOperationException("Unsupported simulation candidate mode.");
+        }
+    }
+
+    private bool TryExecuteTileStep(
+        SimulationContext context,
+        IReadOnlyList<ISimulationHook> hooks,
+        ref MetricBag runBag)
+    {
+        var level = context.SourceLevel;
+        var candidates = context.TileCandidates;
+        candidates.Clear();
+
+        var candidateCount = _candidateFinder.FindCandidates(context);
+
+        if (candidateCount == 0)
+            return false;
+
+        InvokeStepBeforeHooks(hooks, context, ref runBag);
+
+        var selectedCandidateOffset = _candidateScorer.SelectCandidateOffset(
+            context,
+            candidates.Items);
+        if ((uint)selectedCandidateOffset >= (uint)candidateCount)
+            throw new InvalidOperationException("Simulation candidate scorer returned an invalid candidate offset.");
+
+        context.SetSelectedCandidateOffset(selectedCandidateOffset);
+        var selectedTileIndex = candidates.SelectedItem;
+
+        InvokeBehaviourBeforeHooks(hooks, context, ref runBag);
+        level.DoMove(new SelectMove(selectedTileIndex));
+        context.IncreaseMoveCount();
+        InvokeBehaviourAfterHooks(hooks, context, ref runBag);
+
+        InvokeStepAfterHooks(hooks, context, ref runBag);
+
+        return true;
     }
 
     /// <summary>
@@ -95,25 +126,55 @@ public sealed class SimulationRunner
         if (simulationCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(simulationCount), "Simulation count must be greater than 0.");
 
-        random ??= Random.Shared;
+        var context = new SimulationContext(
+            level,
+            simulationCount,
+            random ?? Random.Shared,
+            _candidateFinder.CandidateMode);
+        var runBag = new MetricBag();
+        var aggBag = new MetricBag();
+
+        return SimulateMany(
+            context,
+            runBag,
+            aggBag,
+            hooks);
+    }
+
+    /// <summary>
+    /// 使用外部提供的可复用容器执行当前 batch。调用方必须先调用
+    /// <see cref="SimulationContext.ResetBatch(LevelCore,int,Random,SimulationCandidateMode)"/>
+    /// 完成 context 初始化。
+    /// </summary>
+    public SimulationBatchMetrics SimulateMany(
+        SimulationContext context,
+        MetricBag runBag,
+        MetricBag aggBag,
+        IReadOnlyList<ISimulationHook>? hooks = null)
+    {
+        if (context is null)
+            throw new ArgumentNullException(nameof(context));
+
+        if (runBag is null)
+            throw new ArgumentNullException(nameof(runBag));
+
+        if (aggBag is null)
+            throw new ArgumentNullException(nameof(aggBag));
+
         hooks ??= Array.Empty<ISimulationHook>();
 
-        var context = new SimulationContext(
-            level.Clone(),
-            simulationCount,
-            random,
-            _candidateFinder.CandidateMode);
+        context.EnsureInitialized();
+        aggBag.ResetValues();
 
         var failPositionSum = 0;
-        var aggBag = new MetricBag();
 
         InvokeBatchStartHooks(hooks, context);
 
-        for (var i = 0; i < simulationCount; i++)
+        for (var i = 0; i < context.SimulationCount; i++)
         {
+            runBag.ResetValues();
             context.StartRun(i);
 
-            var runBag = new MetricBag();
             InvokeRunStartHooks(hooks, context, ref runBag);
 
             var runMetrics = SimulateOne(context, hooks, ref runBag);
@@ -121,6 +182,7 @@ public sealed class SimulationRunner
 
             context.CompleteRun(runMetrics);
             InvokeRunEndHooks(hooks, context, ref runBag);
+            InvokeRunAggregateHooks(hooks, context, ref runBag, ref aggBag);
 
             if (runMetrics.IsFailed)
             {
@@ -128,13 +190,13 @@ public sealed class SimulationRunner
             }
         }
 
-        var failureRate = (double)context.FailureCount / simulationCount;
+        var failureRate = (double)context.FailureCount / context.SimulationCount;
         var averageFailPosition = context.FailureCount == 0
             ? -1.0
             : (double)failPositionSum / context.FailureCount;
 
         var batchMetrics = new SimulationBatchMetrics(
-            TotalCount: simulationCount,
+            TotalCount: context.SimulationCount,
             SuccessCount: context.SuccessCount,
             FailureCount: context.FailureCount,
             FailureRate: failureRate,
@@ -215,5 +277,15 @@ public sealed class SimulationRunner
     {
         foreach (var hook in hooks)
             hook.OnRunEnd(context, ref runBag);
+    }
+
+    private static void InvokeRunAggregateHooks(
+        IReadOnlyList<ISimulationHook> hooks,
+        SimulationContext context,
+        ref MetricBag runBag,
+        ref MetricBag aggBag)
+    {
+        foreach (var hook in hooks)
+            hook.OnRunAggregate(context, ref runBag, ref aggBag);
     }
 }

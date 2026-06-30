@@ -65,16 +65,30 @@ MetricBag
 
 ## 3.1 SimulationContext
 
-```csharp
-public sealed class SimulationContext
-{
-    public int BatchId { get; init; }
-    public int RunId { get; init; }
-    public int StepIndex { get; init; }
+SimulationContext 是 simulation 的运行状态容器，可被外部创建并复用。
 
-    public object? State { get; init; }
-}
+它保存 batch / run / step 过程中会变化的状态：
+
+* 当前 run 使用的关卡副本
+* 当前 run index 与 batch 总次数
+* 成功 / 失败 run 计数
+* 当前候选模式与当前局面的候选快照
+* 当前 run 状态与已执行行为数量
+
+它不保存 `runBag`、`aggBag`，也不负责输出。
+
+高频批处理时，调用方应先初始化 context：
+
+```csharp
+context.ResetBatch(
+    level,
+    simulationCount,
+    random,
+    candidateMode);
 ```
+
+Runner 的可复用入口只推进已初始化的 context，不负责装配本轮 batch 的
+level / count / random。
 
 ---
 
@@ -127,12 +141,14 @@ public readonly struct MetricKey<T>
 ```csharp
 public interface IMetricCollector
 {
-    void Compute(SimulationContext context, ref MetricBag runBag);
+    void Compute(
+        SimulationContext context,
+        MetricBag runBag);
 
     void Aggregate(
         SimulationContext context,
-        ref MetricBag runBag,
-        ref MetricBag aggBag);
+        MetricBag runBag,
+        MetricBag aggBag);
 }
 ```
 
@@ -228,10 +244,15 @@ public interface ISimulationHook
     void OnStepAfter(SimulationContext context, ref MetricBag runBag);
 
     void OnRunEnd(SimulationContext context, ref MetricBag runBag);
+
+    void OnRunAggregate(
+        SimulationContext context,
+        ref MetricBag runBag,
+        ref MetricBag aggBag);
 }
 ```
 
-常用实现可继承 `SimulationHookBase`，只覆写关心的生命周期方法。
+`ISimulationHook` 为各生命周期方法提供默认空实现，常用实现只需要实现关心的方法。
 
 Runner 的候选流程拆成两个可替换接口：
 
@@ -240,9 +261,7 @@ public interface ISimulationCandidateFinder
 {
     SimulationCandidateMode CandidateMode { get; }
 
-    int FindCandidates(
-        SimulationContext context,
-        IList<int> candidates);
+    int FindCandidates(SimulationContext context);
 }
 
 public interface ISimulationCandidateScorer
@@ -253,6 +272,7 @@ public interface ISimulationCandidateScorer
         SimulationContext context,
         IReadOnlyList<int> candidates);
 }
+
 ```
 
 默认实现使用 `SelectableTileCandidateFinder` 收集当前可选 tile，
@@ -270,8 +290,8 @@ public interface ISimulationCandidateScorer
 * 不参与指标计算
 * 不直接处理 Event
 * `OnBehaviourBefore` / `OnBehaviourAfter` 可从 `SimulationContext.Candidates.SelectedOffset` 读取本步选中的候选 offset。
-* Tile 候选模式下，可从 `SimulationContext.TileCandidates.SelectedItem` 或 `SimulationContext.SelectedCandidateValue` 读取本步选中的 tile 候选值。
-* Tile 候选模式下，也可从 `SimulationContext.SelectedTileIndex` 读取本步选中的 tileIndex。
+* Tile 候选模式下，可从 `SimulationContext.TileCandidates.SelectedItem` 或 `SimulationContext.SelectedTileIndex` 读取本步选中的 tileIndex。
+* Behaviour 候选模式下，可从 `SimulationContext.BehaviourCandidates.SelectedItem` 或 `SimulationContext.SelectedBehaviour` 读取本步选中的行为组。
 
 ---
 
@@ -281,8 +301,7 @@ public interface ISimulationCandidateScorer
 public interface IMetricSerializer
 {
     void Serialize(
-        SimulationContext context,
-        ref MetricBag bag,
+        MetricBag bag,
         Dictionary<string, object?> output);
 }
 ```
@@ -292,7 +311,7 @@ public interface IMetricSerializer
 ## 职责说明
 
 * MetricBag → Dictionary<string, object?>
-* schema-free 输出
+* 输出哪些指标由实现方决定
 * 用于 CSV / JSON
 
 ---

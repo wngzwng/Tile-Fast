@@ -360,6 +360,16 @@ public sealed class LevelCore
         UndoMove();
     }
 
+    /// <summary>
+    /// 判断当前关卡是否已经完成：牧场与卡槽均为空，且所有棋子已进入回收区。
+    /// </summary>
+    public bool IsFinish()
+    {
+        return Pasture.IsEmpty &&
+               StagingArea.IsEmpty &&
+               Corral.Count == Mapping.TileCount;
+    }
+
     public void Reset()
     {
         Pasture.Reset();

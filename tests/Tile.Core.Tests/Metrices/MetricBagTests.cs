@@ -318,4 +318,38 @@ public sealed class MetricBagTests
         Assert.That(missing, Is.EqualTo(string.Empty));
     }
 
+    [Test]
+    public void TryReadObject_ReadsValuesByUntypedKey()
+    {
+        var bag = new MetricBag();
+        var detail = new DetailPayload("slot_full", 4);
+        var details = new List<DetailPayload> { detail };
+
+        bag.Set(SuccessCount, 12);
+        bag.Set(FailRate, 0.25);
+        bag.Set(IsSuccess, true);
+        bag.Set(LevelId, "level-001");
+        bag.Set(CandidateCountList, new List<int> { 1, 2, 3 });
+        bag.Set(DetailPayloadKey, detail);
+        bag.Set(DetailPayloadList, details);
+
+        Assert.That(bag.TryReadObject(SuccessCount, out var success), Is.True);
+        Assert.That(success, Is.EqualTo(12));
+        Assert.That(bag.TryReadObject(FailRate, out var failRate), Is.True);
+        Assert.That(failRate, Is.EqualTo(0.25));
+        Assert.That(bag.TryReadObject(IsSuccess, out var isSuccess), Is.True);
+        Assert.That(isSuccess, Is.EqualTo(true));
+        Assert.That(bag.TryReadObject(LevelId, out var levelId), Is.True);
+        Assert.That(levelId, Is.EqualTo("level-001"));
+        Assert.That(bag.TryReadObject(CandidateCountList, out var counts), Is.True);
+        Assert.That(counts, Is.EqualTo(new[] { 1, 2, 3 }));
+        Assert.That(bag.TryReadObject(DetailPayloadKey, out var foundDetail), Is.True);
+        Assert.That(foundDetail, Is.EqualTo(detail));
+        Assert.That(bag.TryReadObject(DetailPayloadList, out var foundDetails), Is.True);
+        Assert.That(foundDetails, Is.EqualTo(details));
+
+        Assert.That(bag.TryReadObject(FailureCount, out var missing), Is.False);
+        Assert.That(missing, Is.Null);
+    }
+
 }

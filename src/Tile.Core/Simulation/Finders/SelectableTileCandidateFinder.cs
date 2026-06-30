@@ -13,20 +13,15 @@ public sealed class SelectableTileCandidateFinder : ISimulationCandidateFinder
 
     public SimulationCandidateMode CandidateMode => SimulationCandidateMode.Tile;
 
-    public int FindCandidates(
-        SimulationContext context,
-        IList<int> candidates)
+    public int FindCandidates(SimulationContext context)
     {
         if (context is null)
             throw new ArgumentNullException(nameof(context));
 
-        if (candidates is null)
-            throw new ArgumentNullException(nameof(candidates));
-
-        candidates.Clear();
+        var candidates = context.TileCandidates;
 
         foreach (var tileIndex in context.SourceLevel.Pasture.SelectableTiles)
-            candidates.Add(tileIndex);
+            candidates.MutableItems.Add(tileIndex);
 
         return candidates.Count;
     }

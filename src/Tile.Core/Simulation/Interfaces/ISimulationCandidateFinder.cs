@@ -1,7 +1,7 @@
 namespace Tile.Core.Simulation;
 
 /// <summary>
-/// Simulation 候选生成器，负责把当前 step 可考虑的候选值写入候选缓冲区。
+/// Simulation 候选生成器，负责把当前局面可考虑的候选值写入 <see cref="SimulationContext.Candidates"/>。
 /// </summary>
 public interface ISimulationCandidateFinder
 {
@@ -11,9 +11,7 @@ public interface ISimulationCandidateFinder
     SimulationCandidateMode CandidateMode { get; }
 
     /// <summary>
-    /// 收集当前 step 的候选值，并返回写入 <paramref name="candidates"/> 的数量。
+    /// 收集当前局面的候选值，并返回写入 <paramref name="context"/> 当前候选集合的数量。
     /// </summary>
-    int FindCandidates(
-        SimulationContext context,
-        IList<int> candidates);
+    int FindCandidates(SimulationContext context);
 }

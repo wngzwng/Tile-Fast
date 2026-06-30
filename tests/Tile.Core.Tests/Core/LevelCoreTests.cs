@@ -174,6 +174,57 @@ public sealed class LevelCoreTests
     }
 
     [Test]
+    public void IsFinish_WhenLevelIsInitial_ReturnsFalse()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz(),
+                (2, 0, 0).PackXyz(),
+                (4, 0, 0).PackXyz()
+            ],
+            suits: [1, 1, 1]);
+
+        Assert.That(level.IsFinish(), Is.False);
+    }
+
+    [Test]
+    public void IsFinish_WhenTilesRemainInStagingArea_ReturnsFalse()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz(),
+                (2, 0, 0).PackXyz(),
+                (4, 0, 0).PackXyz()
+            ],
+            suits: [1, 1, 1]);
+
+        level.DoMove(new SelectMove(tileIndex: 0));
+
+        Assert.That(level.IsFinish(), Is.False);
+    }
+
+    [Test]
+    public void IsFinish_WhenAllTilesAreCleared_ReturnsTrue()
+    {
+        var level = CreateLevel(
+            positions:
+            [
+                (0, 0, 0).PackXyz(),
+                (2, 0, 0).PackXyz(),
+                (4, 0, 0).PackXyz()
+            ],
+            suits: [1, 1, 1]);
+
+        level.DoMove(new SelectMove(tileIndex: 0));
+        level.DoMove(new SelectMove(tileIndex: 1));
+        level.DoMove(new SelectMove(tileIndex: 2));
+
+        Assert.That(level.IsFinish(), Is.True);
+    }
+
+    [Test]
     public void Deserialize_CreatesEquivalentStateToConstructor()
     {
         int[] positions =

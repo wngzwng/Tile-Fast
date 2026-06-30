@@ -1,7 +1,7 @@
 namespace Tile.Core.Simulation;
 
 /// <summary>
-/// Simulation 当前候选容器的非泛型公共视图。
+/// Simulation 当前局面候选快照的非泛型公共视图；不保存历史候选累计。
 /// </summary>
 public interface ISimulationCandidateSet
 {
@@ -11,7 +11,7 @@ public interface ISimulationCandidateSet
     SimulationCandidateMode Mode { get; }
 
     /// <summary>
-    /// 当前 step 收集到的候选数量。
+    /// 当前局面收集到的候选数量。
     /// </summary>
     int Count { get; }
 
@@ -21,9 +21,14 @@ public interface ISimulationCandidateSet
     int SelectedOffset { get; }
 
     /// <summary>
-    /// 清空候选数量和选中状态。
+    /// 清空当前局面候选数量和选中状态，用于开始收集新的局面候选。
     /// </summary>
     void Clear();
+
+    /// <summary>
+    /// 记录当前 step 选中的候选 offset。
+    /// </summary>
+    void SetSelectedOffset(int selectedOffset);
 
     /// <summary>
     /// 清空当前 step 的选中状态。

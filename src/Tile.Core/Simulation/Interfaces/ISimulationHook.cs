@@ -10,40 +10,63 @@ public interface ISimulationHook
     /// <summary>
     /// Batch 开始前调用；此时尚未进入任何 run。
     /// </summary>
-    void OnBatchStart(SimulationContext context);
+    void OnBatchStart(SimulationContext context)
+    {
+    }
 
     /// <summary>
     /// Batch 完成后调用；批量指标已写入 <paramref name="aggBag"/>。
     /// </summary>
-    void OnBatchEnd(SimulationContext context, ref MetricBag aggBag);
+    void OnBatchEnd(SimulationContext context, ref MetricBag aggBag)
+    {
+    }
 
     /// <summary>
     /// 单次 run 开始后调用；run 级指标应写入 <paramref name="runBag"/>。
     /// </summary>
-    void OnRunStart(SimulationContext context, ref MetricBag runBag);
+    void OnRunStart(SimulationContext context, ref MetricBag runBag)
+    {
+    }
 
     /// <summary>
     /// 每个 step 的候选集合收集完成后、行为选择前调用。
     /// </summary>
-    void OnStepBefore(SimulationContext context, ref MetricBag runBag);
+    void OnStepBefore(SimulationContext context, ref MetricBag runBag)
+    {
+    }
 
     /// <summary>
     /// 当前行为已选定、尚未执行前调用。
     /// </summary>
-    void OnBehaviourBefore(SimulationContext context, ref MetricBag runBag);
+    void OnBehaviourBefore(SimulationContext context, ref MetricBag runBag)
+    {
+    }
 
     /// <summary>
     /// 当前行为执行完成后调用。
     /// </summary>
-    void OnBehaviourAfter(SimulationContext context, ref MetricBag runBag);
+    void OnBehaviourAfter(SimulationContext context, ref MetricBag runBag)
+    {
+    }
 
     /// <summary>
     /// 每个 step 完成后调用。
     /// </summary>
-    void OnStepAfter(SimulationContext context, ref MetricBag runBag);
+    void OnStepAfter(SimulationContext context, ref MetricBag runBag)
+    {
+    }
 
     /// <summary>
     /// 单次 run 完成后调用；run 结果指标已写入 <paramref name="runBag"/>。
     /// </summary>
-    void OnRunEnd(SimulationContext context, ref MetricBag runBag);
+    void OnRunEnd(SimulationContext context, ref MetricBag runBag)
+    {
+    }
+
+    /// <summary>
+    /// 单次 run 结果已写入 <paramref name="runBag"/> 后调用，用于把 run 指标聚合到 <paramref name="aggBag"/>。
+    /// </summary>
+    void OnRunAggregate(SimulationContext context, ref MetricBag runBag, ref MetricBag aggBag)
+    {
+    }
 }

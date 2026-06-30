@@ -1,7 +1,7 @@
 namespace Tile.Core.Simulation;
 
 /// <summary>
-/// 单次 simulation run 中复用的候选容器。
+/// 当前局面的候选快照；只保存本 step 收集到的候选，不保存历史累计。
 /// </summary>
 public sealed class SimulationCandidateSet<TCandidate> : ISimulationCandidateSet
 {
@@ -24,7 +24,7 @@ public sealed class SimulationCandidateSet<TCandidate> : ISimulationCandidateSet
     public SimulationCandidateMode Mode { get; }
 
     /// <summary>
-    /// 当前 step 收集到的候选项。
+    /// 当前局面收集到的候选项。
     /// </summary>
     public IReadOnlyList<TCandidate> Items => _items;
 
@@ -34,7 +34,7 @@ public sealed class SimulationCandidateSet<TCandidate> : ISimulationCandidateSet
     public IList<TCandidate> MutableItems => _items;
 
     /// <summary>
-    /// 当前 step 收集到的候选数量。
+    /// 当前局面收集到的候选数量。
     /// </summary>
     public int Count => _items.Count;
 
@@ -44,7 +44,7 @@ public sealed class SimulationCandidateSet<TCandidate> : ISimulationCandidateSet
     public int SelectedOffset { get; private set; } = -1;
 
     /// <summary>
-    /// 当前 step 选中的候选项。
+    /// 当前局面选中的候选项。
     /// </summary>
     public TCandidate SelectedItem
     {
@@ -58,7 +58,7 @@ public sealed class SimulationCandidateSet<TCandidate> : ISimulationCandidateSet
     }
 
     /// <summary>
-    /// 尝试读取当前 step 选中的候选项。
+    /// 尝试读取当前局面选中的候选项。
     /// </summary>
     public bool TryGetSelectedItem(out TCandidate? item)
     {
@@ -73,16 +73,15 @@ public sealed class SimulationCandidateSet<TCandidate> : ISimulationCandidateSet
     }
 
     /// <summary>
-    /// 加入一个候选项，并清空上一轮选中状态。
+    /// 加入一个当前局面的候选项。
     /// </summary>
     public void Add(TCandidate item)
     {
         _items.Add(item);
-        ClearSelected();
     }
 
     /// <summary>
-    /// 记录当前 step 选中的候选 offset。
+    /// 记录当前局面选中的候选 offset。
     /// </summary>
     public void SetSelectedOffset(int selectedOffset)
     {
@@ -93,7 +92,7 @@ public sealed class SimulationCandidateSet<TCandidate> : ISimulationCandidateSet
     }
 
     /// <summary>
-    /// 清空候选数量和选中状态。
+    /// 清空当前局面候选数量和选中状态，用于开始收集新的局面候选。
     /// </summary>
     public void Clear()
     {
@@ -102,7 +101,7 @@ public sealed class SimulationCandidateSet<TCandidate> : ISimulationCandidateSet
     }
 
     /// <summary>
-    /// 清空当前 step 的选中状态。
+    /// 清空当前局面的选中状态。
     /// </summary>
     public void ClearSelected()
     {

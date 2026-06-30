@@ -300,6 +300,64 @@ public sealed class MetricBag
         return false;
     }
 
+    public bool TryReadObject(IMetricKey key, out object? value)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+
+        var valueType = key.ValueType;
+
+        if (valueType == typeof(int) &&
+            _ints.TryGetValue(key.Name, out var intValue))
+        {
+            value = intValue;
+            return true;
+        }
+
+        if (valueType == typeof(double) &&
+            _doubles.TryGetValue(key.Name, out var doubleValue))
+        {
+            value = doubleValue;
+            return true;
+        }
+
+        if (valueType == typeof(bool) &&
+            _bools.TryGetValue(key.Name, out var boolValue))
+        {
+            value = boolValue;
+            return true;
+        }
+
+        if (valueType == typeof(string) &&
+            _strings.TryGetValue(key.Name, out var stringValue))
+        {
+            value = stringValue;
+            return true;
+        }
+
+        if (valueType == typeof(List<int>) &&
+            _intLists.TryGetValue(key.Name, out var intListValue))
+        {
+            value = intListValue;
+            return true;
+        }
+
+        if (valueType == typeof(List<double>) &&
+            _doubleLists.TryGetValue(key.Name, out var doubleListValue))
+        {
+            value = doubleListValue;
+            return true;
+        }
+
+        if (IsListType(valueType) &&
+            _objectLists.TryGetValue(key.Name, out var objectListValue))
+        {
+            value = objectListValue;
+            return true;
+        }
+
+        return _objects.TryGetValue(key.Name, out value);
+    }
+
     #endregion
 
     #region 清理

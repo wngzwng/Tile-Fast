@@ -46,7 +46,7 @@ public sealed class SimulationCandidateSetTests
     }
 
     [Test]
-    public void Add_ClearsSelectedCandidate()
+    public void Clear_RemovesCurrentSnapshotAndSelectedCandidate()
     {
         var candidates = new SimulationCandidateSet<int>(
             SimulationCandidateMode.Tile);
@@ -55,9 +55,9 @@ public sealed class SimulationCandidateSetTests
         candidates.Add(7);
         candidates.SetSelectedOffset(selectedOffset: 1);
 
-        candidates.Add(9);
+        candidates.Clear();
 
-        Assert.That(candidates.Count, Is.EqualTo(3));
+        Assert.That(candidates.Count, Is.Zero);
         Assert.That(candidates.SelectedOffset, Is.EqualTo(-1));
         Assert.That(candidates.TryGetSelectedItem(out _), Is.False);
     }
@@ -90,6 +90,50 @@ public sealed class SimulationCandidateSetTests
         Assert.That(context.Candidates.Mode, Is.EqualTo(SimulationCandidateMode.Tile));
         Assert.That(context.TileCandidates.Mode, Is.EqualTo(SimulationCandidateMode.Tile));
         Assert.Throws<InvalidOperationException>(() => _ = context.BehaviourCandidates);
+    }
+
+    [Test]
+    public void SimulationContext_ResetBatch_WhenModeDoesNotChange_ReusesCandidateSet()
+    {
+        var context = new SimulationContext(
+            CreateSingleMatchLevel(),
+            simulationCount: 1,
+            new Random(123),
+            SimulationCandidateMode.Tile);
+        var candidates = context.Candidates;
+        context.TileCandidates.Add(1);
+        context.TileCandidates.SetSelectedOffset(0);
+
+        context.ResetBatch(
+            CreateSingleMatchLevel(),
+            simulationCount: 2,
+            new Random(456),
+            SimulationCandidateMode.Tile);
+
+        Assert.That(context.Candidates, Is.SameAs(candidates));
+        Assert.That(context.CandidateCount, Is.Zero);
+        Assert.That(context.SelectedCandidateOffset, Is.EqualTo(-1));
+    }
+
+    [Test]
+    public void SimulationContext_ResetBatch_WhenModeChanges_ReplacesCandidateSet()
+    {
+        var context = new SimulationContext(
+            CreateSingleMatchLevel(),
+            simulationCount: 1,
+            new Random(123),
+            SimulationCandidateMode.Tile);
+        var candidates = context.Candidates;
+
+        context.ResetBatch(
+            CreateSingleMatchLevel(),
+            simulationCount: 2,
+            new Random(456),
+            SimulationCandidateMode.Behaviour);
+
+        Assert.That(context.Candidates, Is.Not.SameAs(candidates));
+        Assert.That(context.CandidateMode, Is.EqualTo(SimulationCandidateMode.Behaviour));
+        Assert.That(context.Candidates.Mode, Is.EqualTo(SimulationCandidateMode.Behaviour));
     }
 
     private static LevelCore CreateSingleMatchLevel()
