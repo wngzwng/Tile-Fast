@@ -14,7 +14,7 @@ public sealed class SimulationRunner
         ISimulationCandidateScorer? candidateScorer = null)
     {
         _candidateFinder = candidateFinder ?? SelectableTileCandidateFinder.Instance;
-        _candidateScorer = candidateScorer ?? RandomCandidateScorer.Instance;
+        _candidateScorer = candidateScorer ?? CreateDefaultScorer(_candidateFinder.CandidateMode);
 
         if (_candidateFinder.CandidateMode != _candidateScorer.CandidateMode)
             throw new ArgumentException("Simulation candidate finder and scorer must use the same candidate mode.");
@@ -70,7 +70,10 @@ public sealed class SimulationRunner
                     hooks,
                     ref runBag);
             case SimulationCandidateMode.Behaviour:
-                throw new NotSupportedException("Behaviour candidate mode is not wired in SimulationRunner yet.");
+                return TryExecuteBehaviourStep(
+                    context,
+                    hooks,
+                    ref runBag);
             default:
                 throw new InvalidOperationException("Unsupported simulation candidate mode.");
         }
@@ -104,6 +107,44 @@ public sealed class SimulationRunner
         InvokeBehaviourBeforeHooks(hooks, context, ref runBag);
         level.DoMove(new SelectMove(selectedTileIndex));
         context.IncreaseMoveCount();
+        InvokeBehaviourAfterHooks(hooks, context, ref runBag);
+
+        InvokeStepAfterHooks(hooks, context, ref runBag);
+
+        return true;
+    }
+
+    private bool TryExecuteBehaviourStep(
+        SimulationContext context,
+        IReadOnlyList<ISimulationHook> hooks,
+        ref MetricBag runBag)
+    {
+        var level = context.SourceLevel;
+        var candidates = context.BehaviourCandidates;
+        candidates.Clear();
+
+        var candidateCount = _candidateFinder.FindCandidates(context);
+
+        if (candidateCount == 0)
+            return false;
+
+        InvokeStepBeforeHooks(hooks, context, ref runBag);
+
+        var selectedCandidateOffset = _candidateScorer.SelectBehaviourCandidateOffset(
+            context,
+            candidates.Items);
+        if ((uint)selectedCandidateOffset >= (uint)candidateCount)
+            throw new InvalidOperationException("Simulation candidate scorer returned an invalid candidate offset.");
+
+        context.SetSelectedCandidateOffset(selectedCandidateOffset);
+        var selectedBehaviour = candidates.SelectedItem;
+
+        InvokeBehaviourBeforeHooks(hooks, context, ref runBag);
+        foreach (var move in selectedBehaviour.ToMoves())
+        {
+            level.DoMove(move);
+            context.IncreaseMoveCount();
+        }
         InvokeBehaviourAfterHooks(hooks, context, ref runBag);
 
         InvokeStepAfterHooks(hooks, context, ref runBag);
@@ -206,6 +247,16 @@ public sealed class SimulationRunner
         InvokeBatchEndHooks(hooks, context, ref aggBag);
 
         return batchMetrics;
+    }
+
+    private static ISimulationCandidateScorer CreateDefaultScorer(SimulationCandidateMode candidateMode)
+    {
+        return candidateMode switch
+        {
+            SimulationCandidateMode.Tile => RandomCandidateScorer.Instance,
+            SimulationCandidateMode.Behaviour => PiKaBehaviourCandidateScorer.Instance,
+            _ => throw new ArgumentOutOfRangeException(nameof(candidateMode)),
+        };
     }
 
     private static void InvokeBatchStartHooks(

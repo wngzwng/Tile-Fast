@@ -1,5 +1,6 @@
+using System.Buffers;
+using System.Numerics;
 using Tile.Core.Common.BitSet;
-using Tile.Core.Common.Math;
 using Tile.Core.Core;
 
 namespace Tile.Core.Simulation;
@@ -7,9 +8,8 @@ namespace Tile.Core.Simulation;
 /// <summary>
 /// PiKa 规则下的行为评分器。
 /// </summary>
-public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
+public sealed class BehaviourScorerForPiKa
 {
-    private double _softMaxTemperature = 0.5d;
     private static readonly BehaviourScoreConfigPiKa s_defaultConfig = new();
 
     private static readonly Dictionary<int, BehaviourScoreConfigPiKa> s_configByMatchCount = new()
@@ -59,12 +59,6 @@ public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
         _overrideConfig = overrideConfig;
     }
 
-    public BehaviourScorerForPiKa SetSoftMaxTemperature(double softMaxTemperature)
-    {
-        _softMaxTemperature = softMaxTemperature;
-        return this;
-    }
-
     public static BehaviourScoreConfigPiKa DefaultConfig => s_defaultConfig;
 
     public static IReadOnlyDictionary<int, BehaviourScoreConfigPiKa> DefaultConfigByMatchCount
@@ -72,41 +66,6 @@ public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
 
     public static BehaviourScoreConfigPiKa GetDefaultConfig(int matchCount)
         => GetConfig(matchCount);
-
-    public SimulationCandidateMode CandidateMode => SimulationCandidateMode.Behaviour;
-
-    public int SelectCandidateOffset(
-        SimulationContext context,
-        IReadOnlyList<int> candidates)
-    {
-        throw new NotSupportedException("This scorer only supports Behaviour candidates.");
-    }
-
-    public int SelectBehaviourCandidateOffset(
-        SimulationContext context,
-        IReadOnlyList<Behaviour> candidates)
-    {
-        if (context is null)
-            throw new ArgumentNullException(nameof(context));
-        if (candidates is null)
-            throw new ArgumentNullException(nameof(candidates));
-        if (candidates.Count <= 0)
-            throw new ArgumentOutOfRangeException(nameof(candidates));
-
-        var scores = new double[candidates.Count];
-        var weights = new double[candidates.Count];
-        var level = context.SourceLevel;
-
-        for (var offset = 0; offset < candidates.Count; offset++)
-            scores[offset] = EvaluateScore(level, candidates[offset]);
-
-        MathKit.Softmax(scores, weights, temperature: _softMaxTemperature);
-
-        var selectedOffset = MathKit.WeightedChoice(weights, context.Random);
-        return selectedOffset >= 0
-            ? selectedOffset
-            : context.Random.Next(candidates.Count);
-    }
 
     public double EvaluateScore(LevelCore level, Behaviour behaviour)
     {
@@ -143,39 +102,66 @@ public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
         Behaviour behaviour,
         BehaviourScoreConfigPiKa config)
     {
-        CollectBehaviourScoreData(
-            level,
-            behaviour,
-            out int newSelectableCount,
-            out int newVisibleCount,
-            out ulong newSelectableColorBits,
-            out int[] afterSelectableColorCounts,
-            out int[] afterSlotColorCounts);
+        int wordCount = level.Mapping.WordCount;
+        var buffer = ArrayPool<ulong>.Shared.Rent(wordCount * 4);
 
-        return new BehaviourScoreContext
+        try
         {
-            Config = config,
-            BaseScore = EvaluateBaseScore(level, behaviour, config),
-            FreedSlotCount = EvaluateFreedSlotCount(level, behaviour),
-            CanClearWholeColor = EvaluateCanClearWholeColor(
-                behaviour,
-                afterSelectableColorCounts),
-            NewSelectableCount = newSelectableCount,
-            NewVisibleCount = newVisibleCount,
-            SlotRelatedColorScore = EvaluateSlotRelatedColorScore(
-                level.RuleSpec.MatchRequireCount,
-                newSelectableCount,
-                newSelectableColorBits,
-                afterSelectableColorCounts,
-                afterSlotColorCounts,
-                config),
-            NewMatchChanceCount = EvaluateNewMatchChanceCount(
+            var rented = buffer.AsSpan(0, wordCount * 4);
+            rented.Clear();
+
+            var originSelectableBits = rented[..wordCount];
+            var newlyAddedSelectableBits = rented.Slice(wordCount, wordCount);
+            var newlyAddedVisibleBits = rented.Slice(wordCount * 2, wordCount);
+            var afterSelectableBits = rented.Slice(wordCount * 3, wordCount);
+
+            level.Pasture.SelectableTiles.Bits.CopyTo(originSelectableBits);
+
+            ulong newlyAddedSelectableSuitBits = 0UL;
+
+            CollectNewlyAddedExposureBits(
                 level,
-                newSelectableCount,
-                newSelectableColorBits,
-                afterSelectableColorCounts,
-                afterSlotColorCounts),
-        };
+                behaviour,
+                originSelectableBits,
+                newlyAddedSelectableBits,
+                ref newlyAddedSelectableSuitBits,
+                newlyAddedVisibleBits,
+                afterSelectableBits);
+
+            int newlyAddedSelectableCount = BitSetOperations.PopCount(newlyAddedSelectableBits);
+            int newlyAddedVisibleCount = BitSetOperations.PopCount(newlyAddedVisibleBits);
+
+            return new BehaviourScoreContext
+            {
+                Config = config,
+                BaseScore = EvaluateBaseScore(level, behaviour, config),
+                FreedSlotCount = EvaluateFreedSlotCount(level, behaviour),
+                CanClearWholeColor = EvaluateCanClearWholeColor(
+                    level,
+                    behaviour,
+                    afterSelectableBits),
+                NewSelectableCount = newlyAddedSelectableCount,
+                NewVisibleCount = newlyAddedVisibleCount,
+                SlotRelatedColorScore = EvaluateSlotRelatedColorScore(
+                    level,
+                    behaviour,
+                    newlyAddedSelectableCount,
+                    newlyAddedSelectableSuitBits,
+                    afterSelectableBits,
+                    config),
+                NewMatchChanceCount = EvaluateNewMatchChanceCount(
+                    level,
+                    behaviour,
+                    newlyAddedSelectableCount,
+                    newlyAddedSelectableSuitBits,
+                    originSelectableBits,
+                    afterSelectableBits),
+            };
+        }
+        finally
+        {
+            ArrayPool<ulong>.Shared.Return(buffer);
+        }
     }
 
     /// <summary>
@@ -286,13 +272,14 @@ public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
     /// 2. 行为组消除后的盘面，没有这个花色可选
     /// </summary>
     private static bool EvaluateCanClearWholeColor(
+        LevelCore level,
         Behaviour behaviour,
-        ReadOnlySpan<int> afterSelectableColorCounts)
+        ReadOnlySpan<ulong> afterSelectableBits)
     {
         if (!IsClearBehaviour(behaviour.Kind))
             return false;
 
-        return GetColorCount(afterSelectableColorCounts, behaviour.Color) == 0;
+        return CountTilesBySuit(level, afterSelectableBits, behaviour.Color) == 0;
     }
 
     private static bool IsClearBehaviour(BehaviourKind kind)
@@ -315,26 +302,32 @@ public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
     ///     score += (SlotRelatedColorScoreFactor / n) * p
     /// </summary>
     private static double EvaluateSlotRelatedColorScore(
-        int matchRequireCount,
-        int newSelectableCount,
-        ulong newSelectableColorBits,
-        ReadOnlySpan<int> afterSelectableColorCounts,
-        ReadOnlySpan<int> afterSlotColorCounts,
+        LevelCore level,
+        Behaviour behaviour,
+        int newlyAddedSelectableCount,
+        ulong newlyAddedSelectableSuitBits,
+        ReadOnlySpan<ulong> afterSelectableBits,
         BehaviourScoreConfigPiKa config)
     {
-        if (newSelectableCount == 0)
+        if (newlyAddedSelectableCount == 0)
             return 0d;
 
         double score = 0d;
-        int n = matchRequireCount;
+        int n = level.RuleSpec.MatchRequireCount;
+        var suitBits = newlyAddedSelectableSuitBits;
 
-        foreach (int color in EnumerateColorBits(newSelectableColorBits))
+        while (suitBits != 0)
         {
-            if (GetColorCount(afterSlotColorCounts, color) == 0)
-                continue;
+            int suit = BitOperations.TrailingZeroCount(suitBits);
+            int q = GetAfterSlotCount(level, behaviour, suit);
 
-            int p = GetColorCount(afterSelectableColorCounts, color);
-            int q = GetColorCount(afterSlotColorCounts, color);
+            if (q == 0)
+            {
+                suitBits &= suitBits - 1;
+                continue;
+            }
+
+            int p = CountTilesBySuit(level, afterSelectableBits, suit);
 
             if (p + q >= n)
             {
@@ -345,6 +338,8 @@ public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
             {
                 score += (config.SlotRelatedColorScoreFactor / n) * p;
             }
+
+            suitBits &= suitBits - 1;
         }
 
         return score;
@@ -360,29 +355,30 @@ public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
     /// </summary>
     private static int EvaluateNewMatchChanceCount(
         LevelCore level,
-        int newSelectableCount,
-        ulong newSelectableColorBits,
-        ReadOnlySpan<int> afterSelectableColorCounts,
-        ReadOnlySpan<int> afterSlotColorCounts)
+        Behaviour behaviour,
+        int newlyAddedSelectableCount,
+        ulong newlyAddedSelectableSuitBits,
+        ReadOnlySpan<ulong> originSelectableBits,
+        ReadOnlySpan<ulong> afterSelectableBits)
     {
-        if (newSelectableCount == 0)
+        if (newlyAddedSelectableCount == 0)
             return 0;
-
-        var beforeSelectableColorCounts = BuildBeforeSelectableColorCounts(
-            level,
-            newSelectableColorBits);
-        var beforeSlotColorCounts = BuildBeforeSlotColorCounts(level);
 
         int totalNewMatchChanceCount = 0;
         int n = level.RuleSpec.MatchRequireCount;
+        var suitBits = newlyAddedSelectableSuitBits;
 
-        foreach (int color in EnumerateColorBits(newSelectableColorBits))
+        while (suitBits != 0)
         {
-            int beforeSelectableCount = GetColorCount(beforeSelectableColorCounts, color);
-            int beforeSlotCount = GetColorCount(beforeSlotColorCounts, color);
+            int suit = BitOperations.TrailingZeroCount(suitBits);
+            int beforeSelectableCount = CountTilesBySuit(
+                level,
+                originSelectableBits,
+                suit);
+            int beforeSlotCount = level.StagingArea.GetSuitCount(suit);
 
-            int afterSelectableCount = GetColorCount(afterSelectableColorCounts, color);
-            int afterSlotCount = GetColorCount(afterSlotColorCounts, color);
+            int afterSelectableCount = CountTilesBySuit(level, afterSelectableBits, suit);
+            int afterSlotCount = GetAfterSlotCount(level, behaviour, suit);
 
             int beforeMatchChanceCount = GetMatchChanceCount(
                 beforeSelectableCount,
@@ -397,37 +393,46 @@ public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
             int delta = afterMatchChanceCount - beforeMatchChanceCount;
             if (delta > 0)
                 totalNewMatchChanceCount += delta;
+
+            suitBits &= suitBits - 1;
         }
 
         return totalNewMatchChanceCount;
     }
 
-    /// <summary>
-    /// 收集公式所需事实：
-    /// - 行为后新增 selectable / visible
-    /// - 新增 selectable 涉及的颜色集合
-    /// - 行为后 selectable 颜色分布
-    /// - 行为后 slot 颜色分布
-    /// </summary>
-    private static void CollectBehaviourScoreData(
+    private static void BuildSelectedTileBits(Behaviour behaviour, Span<ulong> tileBits)
+    {
+        foreach (int tileIndex in behaviour.SelectIds)
+            BitSetOperations.Set(tileBits, tileIndex);
+    }
+
+    private static void BuildAfterSelectableBits(
+        ReadOnlySpan<ulong> originSelectableBits,
+        ReadOnlySpan<ulong> selectedTileBits,
+        ReadOnlySpan<ulong> newlyAddedSelectableBits,
+        Span<ulong> afterSelectableBits)
+    {
+        originSelectableBits.CopyTo(afterSelectableBits);
+        BitSetOperations.AndNotWith(afterSelectableBits, selectedTileBits);
+        BitSetOperations.OrWith(afterSelectableBits, newlyAddedSelectableBits);
+    }
+
+    private static void CollectNewlyAddedExposureBits(
         LevelCore level,
         Behaviour behaviour,
-        out int newSelectableCount,
-        out int newVisibleCount,
-        out ulong newSelectableColorBits,
-        out int[] afterSelectableColorCounts,
-        out int[] afterSlotColorCounts)
+        ReadOnlySpan<ulong> originSelectableBits,
+        Span<ulong> newlyAddedSelectableBits,
+        ref ulong newlyAddedSelectableSuitBits,
+        Span<ulong> newlyAddedVisibleBits,
+        Span<ulong> afterSelectableBits)
     {
         int wordCount = level.Mapping.WordCount;
-        var behaviourTileBits = BuildBehaviourTileBits(level, behaviour);
-        var newSelectableTileBits = new ulong[wordCount];
-        var newVisibleTileBits = new ulong[wordCount];
-        newSelectableCount = 0;
-        newVisibleCount = 0;
+
+        Span<ulong> selectedTileBits = stackalloc ulong[wordCount];
+        BuildSelectedTileBits(behaviour, selectedTileBits);
 
         Span<ulong> ignoredTileBits = stackalloc ulong[wordCount];
-        foreach (int tileIndex in behaviour.SelectIds)
-            BitSetOperations.Set(ignoredTileBits, tileIndex);
+        selectedTileBits.CopyTo(ignoredTileBits);
 
         Span<ulong> affectedTileBits = stackalloc ulong[wordCount];
         Span<ulong> singleAffectedTileBits = stackalloc ulong[wordCount];
@@ -444,7 +449,7 @@ public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
 
         foreach (int tileIndex in TileIndexSet.Wrap(affectedTileBits))
         {
-            if (BitSetOperations.Get(behaviourTileBits, tileIndex))
+            if (BitSetOperations.Get(selectedTileBits, tileIndex))
                 continue;
 
             level.Pasture.SimulateState(
@@ -453,118 +458,68 @@ public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
                 out bool visible,
                 out bool selectable);
 
-            if (selectable && !level.Pasture.IsSelectable(tileIndex))
+            if (selectable && !BitSetOperations.Get(originSelectableBits, tileIndex))
             {
-                BitSetOperations.Set(newSelectableTileBits, tileIndex);
-                newSelectableCount++;
+                int suit = level.Mapping.GetSuit(tileIndex);
+                BitSetOperations.Set(newlyAddedSelectableBits, tileIndex);
+                newlyAddedSelectableSuitBits |= 1UL << suit;
                 continue;
             }
 
             if (visible && !level.Pasture.IsVisible(tileIndex))
             {
-                BitSetOperations.Set(newVisibleTileBits, tileIndex);
-                newVisibleCount++;
+                BitSetOperations.Set(newlyAddedVisibleBits, tileIndex);
             }
         }
 
-        var newSelectableColorCounts = BuildColorCounts(
-            level,
-            newSelectableTileBits,
-            out newSelectableColorBits);
-        afterSelectableColorCounts = BuildAfterSelectableColorCounts(
-            level,
-            behaviourTileBits,
-            newSelectableColorCounts);
-        afterSlotColorCounts = BuildAfterSlotColorCounts(level, behaviour);
+        BuildAfterSelectableBits(
+            originSelectableBits,
+            selectedTileBits,
+            newlyAddedSelectableBits,
+            afterSelectableBits);
     }
 
-    private static ulong[] BuildBehaviourTileBits(LevelCore level, Behaviour behaviour)
+    private static ulong BuildSuitBits(LevelCore level, ReadOnlySpan<ulong> tileBits)
     {
-        var tileBits = new ulong[level.Mapping.WordCount];
-
-        foreach (int tileIndex in behaviour.SelectIds)
-            BitSetOperations.Set(tileBits, tileIndex);
-
-        return tileBits;
-    }
-
-    private static int[] BuildColorCounts(
-        LevelCore level,
-        ReadOnlySpan<ulong> tileBits,
-        out ulong colorBits)
-    {
-        var counts = new int[Tile.MaxSuitCount];
-        colorBits = 0UL;
+        ulong suitBits = 0UL;
 
         foreach (int tileIndex in TileIndexSet.Wrap(tileBits))
         {
-            int color = level.Mapping.GetSuit(tileIndex);
-            AddToColorCounts(counts, ref colorBits, color, 1);
+            int suit = level.Mapping.GetSuit(tileIndex);
+            suitBits |= 1UL << suit;
         }
 
-        return counts;
+        return suitBits;
     }
 
-    private static int[] BuildBeforeSelectableColorCounts(
-        LevelCore level,
-        ulong targetColorBits)
+    private static int GetAfterSlotCount(LevelCore level, Behaviour behaviour, int suit)
     {
-        var counts = new int[Tile.MaxSuitCount];
-
-        foreach (int tileIndex in level.Pasture.SelectableTiles)
-        {
-            int color = level.Mapping.GetSuit(tileIndex);
-            if (!ContainsColor(targetColorBits, color))
-                continue;
-
-            counts[color]++;
-        }
-
-        return counts;
-    }
-
-    private static int[] BuildAfterSelectableColorCounts(
-        LevelCore level,
-        ReadOnlySpan<ulong> behaviourTileBits,
-        ReadOnlySpan<int> newSelectableColorCounts)
-    {
-        var counts = new int[Tile.MaxSuitCount];
-
-        foreach (int tileIndex in level.Pasture.SelectableTiles)
-        {
-            if (BitSetOperations.Get(behaviourTileBits, tileIndex))
-                continue;
-
-            int color = level.Mapping.GetSuit(tileIndex);
-            counts[color]++;
-        }
-
-        AddColorCounts(counts, newSelectableColorCounts);
-
-        return counts;
-    }
-
-    private static int[] BuildBeforeSlotColorCounts(LevelCore level)
-    {
-        var counts = new int[Tile.MaxSuitCount];
-        var counters = level.StagingArea.SuitCounter;
-
-        for (var color = 0; color < counters.Length; color++)
-            counts[color] = counters[color];
-
-        return counts;
-    }
-
-    private static int[] BuildAfterSlotColorCounts(LevelCore level, Behaviour behaviour)
-    {
-        var afterSlotColorCounts = BuildBeforeSlotColorCounts(level);
+        int originSlotCount = level.StagingArea.GetSuitCount(suit);
 
         if (behaviour.Kind == BehaviourKind.Flip)
-            afterSlotColorCounts[behaviour.Color]++;
-        else
-            afterSlotColorCounts[behaviour.Color] = 0;
+            return suit == behaviour.Color
+                ? originSlotCount + 1
+                : originSlotCount;
 
-        return afterSlotColorCounts;
+        return suit == behaviour.Color
+            ? 0
+            : originSlotCount;
+    }
+
+    private static int CountTilesBySuit(
+        LevelCore level,
+        ReadOnlySpan<ulong> tileBits,
+        int suit)
+    {
+        var suitTileBits = level.Mapping.GetTileBitsBySuit(suit);
+        if (suitTileBits.IsEmpty)
+            return 0;
+
+        Span<ulong> intersectionBits = stackalloc ulong[level.Mapping.WordCount];
+        tileBits.CopyTo(intersectionBits);
+        BitSetOperations.AndWith(intersectionBits, suitTileBits);
+
+        return BitSetOperations.PopCount(intersectionBits);
     }
 
     /// <summary>
@@ -587,41 +542,6 @@ public sealed class BehaviourScorerForPiKa : ISimulationCandidateScorer
             return 0;
 
         return remainingSelectableCount / matchRequireCount;
-    }
-
-    private static void AddColorCounts(Span<int> target, ReadOnlySpan<int> source)
-    {
-        for (var color = 0; color < source.Length; color++)
-            target[color] += source[color];
-    }
-
-    private static void AddToColorCounts(
-        Span<int> counts,
-        ref ulong colorBits,
-        int color,
-        int delta)
-    {
-        counts[color] += delta;
-        colorBits |= 1UL << color;
-    }
-
-    private static int GetColorCount(ReadOnlySpan<int> counts, int color)
-    {
-        return counts[color];
-    }
-
-    private static bool ContainsColor(ulong colorBits, int color)
-    {
-        return (colorBits & (1UL << color)) != 0;
-    }
-
-    private static IEnumerable<int> EnumerateColorBits(ulong colorBits)
-    {
-        for (var color = 0; color < Tile.MaxSuitCount; color++)
-        {
-            if (ContainsColor(colorBits, color))
-                yield return color;
-        }
     }
 
     /// <summary>
