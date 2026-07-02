@@ -26,15 +26,13 @@ public sealed class SimulationCandidateSetTests
     [Test]
     public void SetSelected_WhenModeIsBehaviour_ReturnsSelectedBehaviour()
     {
-        using var pool = new BehaviourPool();
-        using var behaviour = pool.Rent(
+        using var candidates = new BehaviourCandidateSet();
+        var behaviour = candidates.Rent(
             BehaviourKind.GeneralClear,
             color: 1,
             selectIds: [7]);
-        var candidates = new SimulationCandidateSet<Behaviour>(
-            SimulationCandidateMode.Behaviour);
 
-        candidates.Add(pool.Rent(
+        candidates.Add(candidates.Rent(
             BehaviourKind.EasyClear,
             color: 1,
             selectIds: [1]));
@@ -42,7 +40,6 @@ public sealed class SimulationCandidateSetTests
         candidates.SetSelectedOffset(selectedOffset: 1);
 
         Assert.That(candidates.SelectedItem, Is.SameAs(behaviour));
-        candidates.Items[0].Dispose();
     }
 
     [Test]
@@ -134,6 +131,27 @@ public sealed class SimulationCandidateSetTests
         Assert.That(context.Candidates, Is.Not.SameAs(candidates));
         Assert.That(context.CandidateMode, Is.EqualTo(SimulationCandidateMode.Behaviour));
         Assert.That(context.Candidates.Mode, Is.EqualTo(SimulationCandidateMode.Behaviour));
+    }
+
+    [Test]
+    public void SimulationContext_ResetBatch_WhenLeavingBehaviourMode_ReturnsBorrowedBehaviours()
+    {
+        var level = CreateSingleMatchLevel();
+        using var context = new SimulationContext(
+            level,
+            simulationCount: 1,
+            new Random(123),
+            SimulationCandidateMode.Behaviour);
+
+        BehaviourCandidateFinder.Instance.FindCandidates(context);
+        Assert.That(context.CandidateCount, Is.GreaterThan(0));
+
+        Assert.DoesNotThrow(() =>
+            context.ResetBatch(
+                level,
+                simulationCount: 1,
+                new Random(456),
+                SimulationCandidateMode.Tile));
     }
 
     private static LevelCore CreateSingleMatchLevel()

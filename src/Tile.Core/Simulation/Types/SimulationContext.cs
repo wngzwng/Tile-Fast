@@ -5,7 +5,7 @@ namespace Tile.Core.Simulation;
 /// <summary>
 /// Simulation 的可复用运行上下文，记录当前 batch、run 和 step 的状态。
 /// </summary>
-public sealed class SimulationContext
+public sealed class SimulationContext : IDisposable
 {
     private LevelCore? _initialLevel;
     private LevelCore? _sourceLevel;
@@ -111,8 +111,8 @@ public sealed class SimulationContext
     /// <summary>
     /// 当前 step 的 behaviour 候选快照；仅 Behaviour 模式可用。
     /// </summary>
-    public SimulationCandidateSet<Behaviour> BehaviourCandidates =>
-        Candidates as SimulationCandidateSet<Behaviour>
+    public BehaviourCandidateSet BehaviourCandidates =>
+        Candidates as BehaviourCandidateSet
         ?? throw new InvalidOperationException("Current simulation candidate mode is not Behaviour.");
 
     /// <summary>
@@ -143,7 +143,7 @@ public sealed class SimulationContext
     /// 当前 step 选中的 Behaviour；仅 Behaviour 模式有意义，未选定时为 null。
     /// </summary>
     public Behaviour? SelectedBehaviour =>
-        _candidates is SimulationCandidateSet<Behaviour> behaviourCandidates &&
+        _candidates is BehaviourCandidateSet behaviourCandidates &&
         behaviourCandidates.TryGetSelectedItem(out var behaviour)
             ? behaviour
             : null;
@@ -166,6 +166,16 @@ public sealed class SimulationContext
 
         _initialLevel = level.Clone();
         _sourceLevel = _initialLevel.Clone();
+        if (_candidates is not null && _candidates.Mode != candidateMode)
+        {
+            if (_candidates is IDisposable disposable)
+                disposable.Dispose();
+            else
+                _candidates.Clear();
+
+            _candidates = null;
+        }
+
         _candidates = GetOrCreateCandidateSet(
             candidateMode,
             level.Mapping.TileCount);
@@ -197,6 +207,8 @@ public sealed class SimulationContext
         RunStatus = LevelRunStatus.Pending;
         MoveCount = 0;
         Candidates.Clear();
+
+        // 每个 run 都从初始关卡 clone，避免前一次模拟污染本次 run。
         _sourceLevel = _initialLevel!.Clone();
     }
 
@@ -240,6 +252,14 @@ public sealed class SimulationContext
         MoveCount++;
     }
 
+    public void Dispose()
+    {
+        if (_candidates is IDisposable disposable)
+            disposable.Dispose();
+        else
+            _candidates?.Clear();
+    }
+
     internal void EnsureInitialized()
     {
         if (!IsInitialized)
@@ -267,8 +287,7 @@ public sealed class SimulationContext
             SimulationCandidateMode.Tile => new SimulationCandidateSet<int>(
                 SimulationCandidateMode.Tile,
                 tileCandidateCapacity),
-            SimulationCandidateMode.Behaviour => new SimulationCandidateSet<Behaviour>(
-                SimulationCandidateMode.Behaviour),
+            SimulationCandidateMode.Behaviour => new BehaviourCandidateSet(),
             _ => throw new ArgumentOutOfRangeException(nameof(candidateMode)),
         };
     }

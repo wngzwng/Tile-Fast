@@ -62,6 +62,6 @@ public sealed class PiKaBehaviourCandidateScorer : ISimulationCandidateScorer
         var selectedOffset = MathKit.WeightedChoice(weights, context.Random);
         return selectedOffset >= 0
             ? selectedOffset
-            : context.Random.Next(candidates.Count);
+            : -1;
     }
 }

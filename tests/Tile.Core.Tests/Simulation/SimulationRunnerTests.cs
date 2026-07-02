@@ -267,18 +267,20 @@ public sealed class SimulationRunnerTests
     }
 
     [Test]
-    public void SimulateMany_WhenCandidateModeIsBehaviour_ThrowsNotSupported()
+    public void SimulateMany_WhenCandidateModeIsBehaviour_ExecutesBehaviourCandidates()
     {
         var level = CreateSingleMatchLevel();
-        var finder = new RecordingCandidateFinder(SimulationCandidateMode.Behaviour);
-        var scorer = new FirstCandidateScorer(SimulationCandidateMode.Behaviour);
+        var finder = BehaviourCandidateFinder.Instance;
+        var scorer = FirstCandidateScorer.Behaviour();
         var runner = new SimulationRunner(finder, scorer);
 
-        Assert.Throws<NotSupportedException>(() =>
-            runner.SimulateMany(
-                level,
-                simulationCount: 1,
-                new Random(123)));
+        var metrics = runner.SimulateMany(
+            level,
+            simulationCount: 1,
+            new Random(123));
+
+        Assert.That(metrics.SuccessCount, Is.EqualTo(1));
+        Assert.That(scorer.CallCount, Is.GreaterThan(0));
     }
 
     [Test]
@@ -556,6 +558,9 @@ public sealed class SimulationRunnerTests
             _candidateMode = candidateMode;
         }
 
+        public static FirstCandidateScorer Behaviour()
+            => new(SimulationCandidateMode.Behaviour);
+
         public int CallCount { get; private set; }
 
         public SimulationCandidateMode CandidateMode => _candidateMode;
@@ -565,6 +570,16 @@ public sealed class SimulationRunnerTests
         public int SelectCandidateOffset(
             SimulationContext context,
             IReadOnlyList<int> candidates)
+        {
+            CallCount++;
+            CandidateCounts.Add(candidates.Count);
+
+            return 0;
+        }
+
+        public int SelectBehaviourCandidateOffset(
+            SimulationContext context,
+            IReadOnlyList<Behaviour> candidates)
         {
             CallCount++;
             CandidateCounts.Add(candidates.Count);

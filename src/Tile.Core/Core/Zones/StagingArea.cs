@@ -56,6 +56,8 @@ public sealed class StagingArea
     /// </summary>
     public ulong SuitBits => _suitBits;
 
+    public ReadOnlySpan<byte> SuitCounter => _suitCounts;
+
     /// <summary>
     /// 当前卡槽内的棋子顺序。
     /// </summary>

@@ -34,6 +34,7 @@ public static partial class MathKit
         {
             yield return mask;
 
+            // Gosper's hack：在相同置位数量下生成下一个组合 mask。
             var c = mask & (0UL - mask);
             var r = mask + c;
 

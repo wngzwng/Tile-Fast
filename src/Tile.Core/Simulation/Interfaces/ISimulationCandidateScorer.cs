@@ -17,4 +17,11 @@ public interface ISimulationCandidateScorer
     int SelectCandidateOffset(
         SimulationContext context,
         IReadOnlyList<int> candidates);
+
+    int SelectBehaviourCandidateOffset(
+        SimulationContext context,
+        IReadOnlyList<Behaviour> candidates)
+    {
+        throw new NotSupportedException("This scorer does not support Behaviour candidates.");
+    }
 }

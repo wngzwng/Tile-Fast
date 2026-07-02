@@ -12,7 +12,7 @@ public sealed class Behaviour : IDisposable
     private int _selectCount;
     private bool _isRented;
 
-    internal Behaviour()
+    public Behaviour()
     {
     }
 
@@ -69,7 +69,12 @@ public sealed class Behaviour : IDisposable
     public void Dispose()
     {
         if (_owner is null)
+        {
+            if (_isRented)
+                DetachSelectIds(out _);
+
             return;
+        }
 
         _owner.Return(this);
     }
@@ -97,6 +102,19 @@ public sealed class Behaviour : IDisposable
         Color = color;
         _selectIds = selectIds ?? throw new ArgumentNullException(nameof(selectIds));
         _selectCount = selectCount;
+        _isRented = true;
+    }
+
+    internal void Initialize(
+        BehaviourKind kind,
+        int color,
+        int[] selectIds)
+    {
+        _owner = null;
+        Kind = kind;
+        Color = color;
+        _selectIds = selectIds ?? throw new ArgumentNullException(nameof(selectIds));
+        _selectCount = selectIds.Length;
         _isRented = true;
     }
 

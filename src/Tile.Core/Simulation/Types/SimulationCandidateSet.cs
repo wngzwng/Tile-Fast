@@ -96,6 +96,12 @@ public sealed class SimulationCandidateSet<TCandidate> : ISimulationCandidateSet
     /// </summary>
     public void Clear()
     {
+        foreach (var item in _items)
+        {
+            if (item is IDisposable disposable)
+                disposable.Dispose();
+        }
+
         _items.Clear();
         ClearSelected();
     }
