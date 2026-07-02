@@ -80,7 +80,7 @@ public sealed class BehaviourCandidateSet : ISimulationCandidateSet, IDisposable
 
     public void Clear()
     {
-        // CandidateSet 是 step 候选快照的 owner；统一在这里归还 Behaviour，外部只读不归还。
+        // CandidateSet 是本 step 候选快照 owner；Clear 是唯一统一归还入口。
         foreach (var item in _items)
             _pool.Return(item);
 

@@ -1,7 +1,7 @@
 namespace Tile.Core.Simulation;
 
 /// <summary>
-/// Behaviour 对象池；不拥有外部资源，也不追踪借出对象。
+/// Behaviour 对象池；只复用对象，不拥有外部资源，也不追踪借出对象。
 /// </summary>
 public sealed class BehaviourPool
 {

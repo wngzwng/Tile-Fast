@@ -4,7 +4,7 @@ namespace Tile.Core.Simulation;
 
 /// <summary>
 /// 行为组，表示一次候选行为需要按顺序选择的 tile 集合。
-/// Behaviour 由 BehaviourCandidateSet 拥有；单个 Behaviour 不负责归还自己。
+/// Behaviour 是 BehaviourCandidateSet 拥有的 step 候选快照；单个对象不负责归还自己。
 /// </summary>
 public sealed class Behaviour
 {
@@ -93,7 +93,7 @@ public sealed class Behaviour
 
     internal void Reset()
     {
-        // Clear 后旧候选应立即失效，避免 scorer/runner 持有跨 step 的 Behaviour。
+        // Clear 后旧候选必须失效，避免 scorer/runner 跨 step 持有 Behaviour。
         if (_selectCount > 0)
             Array.Clear(_selectIds, 0, _selectCount);
 
