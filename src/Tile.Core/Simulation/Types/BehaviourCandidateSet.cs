@@ -5,14 +5,19 @@ namespace Tile.Core.Simulation;
 /// </summary>
 public sealed class BehaviourCandidateSet : ISimulationCandidateSet, IDisposable
 {
-    private readonly BehaviourPool _pool = new();
+    private readonly BehaviourPool _pool;
     private readonly List<Behaviour> _items;
 
-    public BehaviourCandidateSet(int capacity = 0)
+    public BehaviourCandidateSet(
+        int defaultSelectCapacity,
+        int capacity = 0)
     {
+        if (defaultSelectCapacity < 0)
+            throw new ArgumentOutOfRangeException(nameof(defaultSelectCapacity));
         if (capacity < 0)
             throw new ArgumentOutOfRangeException(nameof(capacity));
 
+        _pool = new BehaviourPool(defaultSelectCapacity);
         _items = new List<Behaviour>(capacity);
     }
 
@@ -75,8 +80,9 @@ public sealed class BehaviourCandidateSet : ISimulationCandidateSet, IDisposable
 
     public void Clear()
     {
+        // CandidateSet 是 step 候选快照的 owner；统一在这里归还 Behaviour，外部只读不归还。
         foreach (var item in _items)
-            item.Dispose();
+            _pool.Return(item);
 
         _items.Clear();
         ClearSelected();
@@ -90,6 +96,5 @@ public sealed class BehaviourCandidateSet : ISimulationCandidateSet, IDisposable
     public void Dispose()
     {
         Clear();
-        _pool.Dispose();
     }
 }

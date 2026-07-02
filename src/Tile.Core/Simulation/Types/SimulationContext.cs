@@ -178,7 +178,8 @@ public sealed class SimulationContext : IDisposable
 
         _candidates = GetOrCreateCandidateSet(
             candidateMode,
-            level.Mapping.TileCount);
+            level.Mapping.TileCount,
+            level.RuleSpec.SlotCapacity);
         _candidates.Clear();
 
         SimulationCount = simulationCount;
@@ -268,26 +269,29 @@ public sealed class SimulationContext : IDisposable
 
     private ISimulationCandidateSet GetOrCreateCandidateSet(
         SimulationCandidateMode candidateMode,
-        int tileCandidateCapacity)
+        int tileCandidateCapacity,
+        int behaviourSelectCapacity)
     {
         if (_candidates?.Mode == candidateMode)
             return _candidates;
 
         return CreateCandidateSet(
             candidateMode,
-            tileCandidateCapacity);
+            tileCandidateCapacity,
+            behaviourSelectCapacity);
     }
 
     private static ISimulationCandidateSet CreateCandidateSet(
         SimulationCandidateMode candidateMode,
-        int tileCandidateCapacity)
+        int tileCandidateCapacity,
+        int behaviourSelectCapacity)
     {
         return candidateMode switch
         {
             SimulationCandidateMode.Tile => new SimulationCandidateSet<int>(
                 SimulationCandidateMode.Tile,
                 tileCandidateCapacity),
-            SimulationCandidateMode.Behaviour => new BehaviourCandidateSet(),
+            SimulationCandidateMode.Behaviour => new BehaviourCandidateSet(behaviourSelectCapacity),
             _ => throw new ArgumentOutOfRangeException(nameof(candidateMode)),
         };
     }

@@ -108,16 +108,16 @@ public sealed class FseFinderTests
 
     private sealed class BehaviourCollector : IDisposable
     {
-        private readonly BehaviourPool _pool = new();
+        private readonly BehaviourCandidateSet _candidates = new(LevelRuleSpec.TripleTile.SlotCapacity);
 
-        public List<Behaviour> Items { get; } = [];
+        public IReadOnlyList<Behaviour> Items => _candidates.Items;
 
         public Behaviour Rent(
             BehaviourKind kind,
             int color,
             ReadOnlySpan<int> selectIds)
         {
-            return _pool.Rent(
+            return _candidates.Rent(
                 kind,
                 color,
                 selectIds);
@@ -125,15 +125,12 @@ public sealed class FseFinderTests
 
         public void Add(Behaviour behaviour)
         {
-            Items.Add(behaviour);
+            _candidates.Add(behaviour);
         }
 
         public void Dispose()
         {
-            foreach (var behaviour in Items)
-                behaviour.Dispose();
-
-            _pool.Dispose();
+            _candidates.Dispose();
         }
     }
 }

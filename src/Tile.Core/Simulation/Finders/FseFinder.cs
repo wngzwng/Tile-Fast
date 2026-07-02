@@ -28,7 +28,7 @@ public sealed partial class FseFinder
             throw new ArgumentNullException(nameof(behaviourCollect));
 
         var board = FseBoard.Create(level);
-        var contextPool = new FseContextPool(board.WordCount);
+        var contextPool = new FseContextPool(board.MatchRequireCount, board.WordCount);
         // 已参与任意消除候选的牌，不再作为 flip 候选输出。
         var coveredByClearBits = new ulong[board.WordCount];
         var candidateCount = 0;
@@ -70,15 +70,10 @@ public sealed partial class FseFinder
             if (originSelectableCount == 0)
                 continue;
 
-            var originSelectable = BuildTileIndexes(originSelectableBits, originSelectableCount);
-            if (originSelectable.Length == 0)
-                continue;
-
             var root = contextPool.Rent(
                 suit,
-                fixedGroup: [],
-                selectableGroup: [],
-                expandedGroup: originSelectable);
+                originSelectableBits,
+                originSelectableCount);
 
             SearchClearCandidates(
                 board,
@@ -105,6 +100,9 @@ public sealed partial class FseFinder
         ref int candidateCount)
     {
         var stack = new Stack<SearchFrame>();
+        // Scratch 属于一次单色搜索过程；Context 只保存可回溯状态，Pool 也不再代管临时资源。
+        var fixedAndSourceScratchBits = new ulong[board.WordCount];
+        var expandedScratchBits = new ulong[board.WordCount];
         stack.Push(new SearchFrame(root, rootKind));
         FseContext? activeContext = null;
 
@@ -133,13 +131,26 @@ public sealed partial class FseFinder
                     continue;
                 }
 
-                foreach (var next in context.Advance(contextPool, (sourceTileIndex, fixedBits, selectableBitsAfterFixed) =>
-                             FindExpandedTiles(
-                                 board,
-                                 sourceTileIndex,
-                                 fixedBits.Span,
-                                 selectableBitsAfterFixed.Span)))
+                foreach (var sourceTileIndex in TileIndexSet.Wrap(context.ExpandedBits.AsSpan(0, board.WordCount)))
                 {
+                    // 这里用当前层的已可选集合过滤新增 E，避免同一张牌在不同组里重复参与组合。
+                    var expandedCount = FindExpandedTiles(
+                        board,
+                        sourceTileIndex,
+                        context.FixedBits.AsSpan(0, board.WordCount),
+                        context.SelectableBitsAfterFixed.AsSpan(0, board.WordCount),
+                        fixedAndSourceScratchBits,
+                        expandedScratchBits);
+
+                    if (expandedCount == 0)
+                        continue;
+
+                    var next = contextPool.RentAdvanced(
+                        context,
+                        sourceTileIndex,
+                        expandedScratchBits,
+                        expandedCount);
+
                     stack.Push(new SearchFrame(next, BehaviourKind.HardClear));
                 }
 
@@ -218,36 +229,23 @@ public sealed partial class FseFinder
         }
     }
 
-    private static int[] FindExpandedTiles(
+    private static int FindExpandedTiles(
         FseBoard board,
         int sourceTileIndex,
         ReadOnlySpan<ulong> fixedBits,
-        ReadOnlySpan<ulong> selectableBitsAfterFixed)
+        ReadOnlySpan<ulong> selectableBitsAfterFixed,
+        Span<ulong> fixedAndSourceScratchBits,
+        Span<ulong> expandedScratchBits)
     {
-        var fixedAndSourceBits = new ulong[board.WordCount];
-        var expandedCandidateBits = new ulong[board.WordCount];
+        fixedAndSourceScratchBits[..board.WordCount].Clear();
+        expandedScratchBits[..board.WordCount].Clear();
 
-        board.CollectExpandedTileBits(
+        return board.CollectExpandedTileBits(
             sourceTileIndex,
             fixedBits,
             selectableBitsAfterFixed,
-            fixedAndSourceBits,
-            expandedCandidateBits);
-
-        return BuildTileIndexes(
-            expandedCandidateBits,
-            BitSetOperations.PopCount(expandedCandidateBits));
-    }
-
-    private static int[] BuildTileIndexes(ReadOnlySpan<ulong> bits, int count)
-    {
-        var result = new int[count];
-        var writeIndex = 0;
-
-        foreach (var tileIndex in TileIndexSet.Wrap(bits))
-            result[writeIndex++] = tileIndex;
-
-        return result;
+            fixedAndSourceScratchBits,
+            expandedScratchBits);
     }
 
     private static IEnumerable<int> EnumerateSuitBits(ulong suitBits)

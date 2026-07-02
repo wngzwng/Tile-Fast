@@ -4,16 +4,20 @@ namespace Tile.Core.Simulation;
 
 /// <summary>
 /// 行为组，表示一次候选行为需要按顺序选择的 tile 集合。
+/// Behaviour 由 BehaviourCandidateSet 拥有；单个 Behaviour 不负责归还自己。
 /// </summary>
-public sealed class Behaviour : IDisposable
+public sealed class Behaviour
 {
-    private BehaviourPool? _owner;
-    private int[] _selectIds = [];
+    private int[] _selectIds;
     private int _selectCount;
     private bool _isRented;
 
-    public Behaviour()
+    public Behaviour(int defaultSelectCapacity)
     {
+        if (defaultSelectCapacity < 0)
+            throw new ArgumentOutOfRangeException(nameof(defaultSelectCapacity));
+
+        _selectIds = new int[defaultSelectCapacity];
     }
 
     /// <summary>
@@ -63,22 +67,6 @@ public sealed class Behaviour : IDisposable
             yield return new SelectMove(_selectIds[i]);
     }
 
-    /// <summary>
-    /// 将行为组和内部数组归还给所属对象池。
-    /// </summary>
-    public void Dispose()
-    {
-        if (_owner is null)
-        {
-            if (_isRented)
-                DetachSelectIds(out _);
-
-            return;
-        }
-
-        _owner.Return(this);
-    }
-
     public override string ToString()
     {
         EnsureActive();
@@ -91,45 +79,36 @@ public sealed class Behaviour : IDisposable
     }
 
     internal void Initialize(
-        BehaviourPool owner,
         BehaviourKind kind,
         int color,
-        int[] selectIds,
-        int selectCount)
+        ReadOnlySpan<int> selectIds)
     {
-        _owner = owner ?? throw new ArgumentNullException(nameof(owner));
         Kind = kind;
         Color = color;
-        _selectIds = selectIds ?? throw new ArgumentNullException(nameof(selectIds));
-        _selectCount = selectCount;
-        _isRented = true;
-    }
-
-    internal void Initialize(
-        BehaviourKind kind,
-        int color,
-        int[] selectIds)
-    {
-        _owner = null;
-        Kind = kind;
-        Color = color;
-        _selectIds = selectIds ?? throw new ArgumentNullException(nameof(selectIds));
+        EnsureCapacity(selectIds.Length);
+        selectIds.CopyTo(_selectIds);
         _selectCount = selectIds.Length;
         _isRented = true;
     }
 
-    internal int[] DetachSelectIds(out int selectCount)
+    internal void Reset()
     {
-        var selectIds = _selectIds;
-        selectCount = _selectCount;
+        // Clear 后旧候选应立即失效，避免 scorer/runner 持有跨 step 的 Behaviour。
+        if (_selectCount > 0)
+            Array.Clear(_selectIds, 0, _selectCount);
 
         Kind = default;
         Color = default;
-        _selectIds = [];
         _selectCount = 0;
         _isRented = false;
+    }
 
-        return selectIds;
+    private void EnsureCapacity(int selectCount)
+    {
+        if (_selectIds.Length >= selectCount)
+            return;
+
+        _selectIds = new int[selectCount];
     }
 
     private void EnsureActive()

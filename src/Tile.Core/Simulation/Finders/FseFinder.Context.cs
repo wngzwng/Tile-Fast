@@ -1,5 +1,4 @@
 using Tile.Core.Common.BitSet;
-using System.Buffers;
 using Tile.Core.Common.Math;
 
 namespace Tile.Core.Simulation;
@@ -14,57 +13,106 @@ public sealed partial class FseFinder
     /// </summary>
     private sealed class FseContext
     {
-        public int[] Fixed { get; private set; } = [];
+        private readonly int _wordCount;
+
+        public FseContext(int matchRequireCount, int wordCount)
+        {
+            if (matchRequireCount < 0)
+                throw new ArgumentOutOfRangeException(nameof(matchRequireCount));
+            if (wordCount < 0)
+                throw new ArgumentOutOfRangeException(nameof(wordCount));
+
+            // Context 会在 DFS 中反复复用；这些 buffer 属于状态本身，不再向 ArrayPool 租借。
+            _wordCount = wordCount;
+            Fixed = new int[matchRequireCount];
+            FixedBits = new ulong[wordCount];
+            SelectableBits = new ulong[wordCount];
+            ExpandedBits = new ulong[wordCount];
+            SelectableBitsAfterFixed = new ulong[wordCount];
+        }
+
+        // Fixed 需要保留展开链顺序；S/E 只是集合，用 bitset 更贴近后续状态模拟。
+        public int[] Fixed { get; }
 
         public int FixedCount { get; private set; }
 
-        public ulong[] FixedBits { get; private set; } = [];
+        public ulong[] FixedBits { get; }
 
-        public int[] Selectable { get; private set; } = [];
+        public ulong[] SelectableBits { get; }
 
         public int SelectableCount { get; private set; }
 
-        public ulong[] SelectableBitsAfterFixed { get; private set; } = [];
+        // 包含当前上下文下已经可直接选择的同色牌，用于过滤“再次展开得到的新增牌”。
+        public ulong[] SelectableBitsAfterFixed { get; }
 
-        public int[] Expanded { get; private set; } = [];
+        public ulong[] ExpandedBits { get; }
 
         public int ExpandedCount { get; private set; }
 
         public int Suit { get; private set; }
 
-        public void Initialize(
+        public void InitializeRoot(
             int suit,
-            int[] fixedGroup,
-            int fixedCount,
-            ulong[] fixedBits,
-            int[] selectableGroup,
-            int selectableCount,
-            ulong[] selectableBitsAfterFixed,
-            int[] expandedGroup,
+            ReadOnlySpan<ulong> expandedBits,
             int expandedCount)
         {
             Suit = suit;
-            Fixed = fixedGroup;
-            FixedCount = fixedCount;
-            FixedBits = fixedBits;
-            Selectable = selectableGroup;
-            SelectableCount = selectableCount;
-            SelectableBitsAfterFixed = selectableBitsAfterFixed;
-            Expanded = expandedGroup;
+            FixedCount = 0;
+            SelectableCount = 0;
             ExpandedCount = expandedCount;
+
+            ClearState();
+            expandedBits[.._wordCount].CopyTo(ExpandedBits);
+            // Root 没有 Fixed，原始可选组既是第一层 Expanded，也是 fixed 后已可选集合。
+            expandedBits[.._wordCount].CopyTo(SelectableBitsAfterFixed);
+        }
+
+        public void InitializeAdvanced(
+            FseContext source,
+            int expandedTileIndex,
+            ReadOnlySpan<ulong> expandedBits,
+            int expandedCount)
+        {
+            Suit = source.Suit;
+            FixedCount = source.FixedCount + 1;
+            SelectableCount = source.SelectableCount + source.ExpandedCount - 1;
+            ExpandedCount = expandedCount;
+
+            ClearState();
+
+            source.Fixed.AsSpan(0, source.FixedCount).CopyTo(Fixed);
+            Fixed[source.FixedCount] = expandedTileIndex;
+
+            source.FixedBits.AsSpan(0, _wordCount).CopyTo(FixedBits);
+            BitSetOperations.Set(FixedBits, expandedTileIndex);
+
+            source.SelectableBits.AsSpan(0, _wordCount).CopyTo(SelectableBits);
+            BitSetOperations.OrWith(SelectableBits, source.ExpandedBits.AsSpan(0, _wordCount));
+            BitSetOperations.Clear(SelectableBits, expandedTileIndex);
+
+            expandedBits[.._wordCount].CopyTo(ExpandedBits);
+
+            // 下一层展开只应该关注“新露出的牌”，所以要把旧 S/E 和本轮新 E 都记入已可选集合。
+            SelectableBits.AsSpan(0, _wordCount).CopyTo(SelectableBitsAfterFixed);
+            BitSetOperations.OrWith(SelectableBitsAfterFixed, ExpandedBits.AsSpan(0, _wordCount));
         }
 
         public void Reset()
         {
             Suit = default;
-            Fixed = [];
             FixedCount = 0;
-            FixedBits = [];
-            Selectable = [];
             SelectableCount = 0;
-            SelectableBitsAfterFixed = [];
-            Expanded = [];
             ExpandedCount = 0;
+            ClearState();
+        }
+
+        private void ClearState()
+        {
+            Array.Clear(Fixed, 0, Fixed.Length);
+            FixedBits.AsSpan(0, _wordCount).Clear();
+            SelectableBits.AsSpan(0, _wordCount).Clear();
+            ExpandedBits.AsSpan(0, _wordCount).Clear();
+            SelectableBitsAfterFixed.AsSpan(0, _wordCount).Clear();
         }
 
         public bool CanPick(int clearNeedCount)
@@ -81,30 +129,6 @@ public sealed partial class FseFinder
             // 下一层仍会从 Expanded 至少选 1；只要 Fixed+1 还不足以完成消除，就允许继续展开。
             return clearNeedCount > 0 &&
                    FixedCount + 1 < clearNeedCount;
-        }
-
-        public IEnumerable<FseContext> Advance(
-            FseContextPool contextPool,
-            Func<int, ReadOnlyMemory<ulong>, ReadOnlyMemory<ulong>, int[]> expand)
-        {
-            var fixedBits = FixedBits.AsMemory(0, contextPool.WordCount);
-            var selectableBitsAfterFixed = SelectableBitsAfterFixed.AsMemory(0, contextPool.WordCount);
-
-            for (var i = 0; i < ExpandedCount; i++)
-            {
-                var expandedTileIndex = Expanded[i];
-                var newExpanded = expand(
-                    expandedTileIndex,
-                    fixedBits,
-                    selectableBitsAfterFixed);
-                if (newExpanded.Length == 0)
-                    continue;
-
-                yield return contextPool.RentAdvanced(
-                    this,
-                    expandedTileIndex,
-                    newExpanded);
-            }
         }
 
         public IEnumerable<FsePick> Pick(int clearNeedCount)
@@ -140,16 +164,22 @@ public sealed partial class FseFinder
         {
             var writeIndex = 0;
 
-            WriteByMask(Fixed, FixedCount, pick.FixedMask, destination, ref writeIndex);
-            WriteByMask(Selectable, SelectableCount, pick.SelectableMask, destination, ref writeIndex);
-            WriteByMask(Expanded, ExpandedCount, pick.ExpandedMask, destination, ref writeIndex);
+            WriteByMask(Fixed.AsSpan(0, FixedCount), pick.FixedMask, destination, ref writeIndex);
+
+            // S/E 平时只保存 bitset；只有输出具体行为时才临时展开成按 mask 可寻址的 index span。
+            Span<int> selectable = stackalloc int[SelectableCount];
+            TileIndexSet.Wrap(SelectableBits.AsSpan(0, _wordCount)).CopyTo(selectable);
+            WriteByMask(selectable, pick.SelectableMask, destination, ref writeIndex);
+
+            Span<int> expanded = stackalloc int[ExpandedCount];
+            TileIndexSet.Wrap(ExpandedBits.AsSpan(0, _wordCount)).CopyTo(expanded);
+            WriteByMask(expanded, pick.ExpandedMask, destination, ref writeIndex);
 
             return writeIndex;
         }
 
         private static void WriteByMask(
-            int[] source,
-            int count,
+            ReadOnlySpan<int> source,
             ulong mask,
             Span<int> destination,
             ref int writeIndex)
@@ -157,7 +187,7 @@ public sealed partial class FseFinder
             if (mask == 0UL)
                 return;
 
-            for (var i = 0; i < count; i++)
+            for (var i = 0; i < source.Length; i++)
             {
                 if (((mask >> i) & 1UL) != 0)
                     destination[writeIndex++] = source[i];
@@ -170,173 +200,66 @@ public sealed partial class FseFinder
 
     private sealed class FseContextPool
     {
-        private readonly ArrayPool<int> _arrayPool;
-        private readonly ArrayPool<ulong> _bitArrayPool;
+        // Pool 只负责 Context 生命周期；展开 scratch 由搜索过程持有，避免资源管理边界扩散。
         private readonly Stack<FseContext> _contexts = new();
+        private readonly int _matchRequireCount;
         private readonly int _wordCount;
 
         public FseContextPool(
-            int wordCount,
-            ArrayPool<int>? arrayPool = null,
-            ArrayPool<ulong>? bitArrayPool = null)
+            int matchRequireCount,
+            int wordCount)
         {
+            if (matchRequireCount < 0)
+                throw new ArgumentOutOfRangeException(nameof(matchRequireCount));
             if (wordCount < 0)
                 throw new ArgumentOutOfRangeException(nameof(wordCount));
 
+            _matchRequireCount = matchRequireCount;
             _wordCount = wordCount;
-            _arrayPool = arrayPool ?? ArrayPool<int>.Shared;
-            _bitArrayPool = bitArrayPool ?? ArrayPool<ulong>.Shared;
         }
 
         public int WordCount => _wordCount;
 
         public FseContext Rent(
             int suit,
-            ReadOnlySpan<int> fixedGroup,
-            ReadOnlySpan<int> selectableGroup,
-            ReadOnlySpan<int> expandedGroup)
+            ReadOnlySpan<ulong> expandedBits,
+            int expandedCount)
         {
             var context = _contexts.Count > 0
                 ? _contexts.Pop()
-                : new FseContext();
+                : new FseContext(_matchRequireCount, _wordCount);
 
-            context.Initialize(
+            context.InitializeRoot(
                 suit,
-                RentCopy(fixedGroup),
-                fixedGroup.Length,
-                RentBits(fixedGroup),
-                RentCopy(selectableGroup),
-                selectableGroup.Length,
-                RentSelectableBits(selectableGroup, expandedGroup),
-                RentCopy(expandedGroup),
-                expandedGroup.Length);
+                expandedBits,
+                expandedCount);
 
             return context;
         }
 
-        public FseContext RentAdvanced(FseContext source, int expandedTileIndex, ReadOnlySpan<int> newExpanded)
+        public FseContext RentAdvanced(
+            FseContext source,
+            int expandedTileIndex,
+            ReadOnlySpan<ulong> expandedBits,
+            int expandedCount)
         {
-            var fixedGroup = _arrayPool.Rent(source.FixedCount + 1);
-            source.Fixed.AsSpan(0, source.FixedCount).CopyTo(fixedGroup);
-            fixedGroup[source.FixedCount] = expandedTileIndex;
-
-            var selectableCount = source.SelectableCount + source.ExpandedCount - 1;
-            var selectableGroup = _arrayPool.Rent(selectableCount);
-            source.Selectable.AsSpan(0, source.SelectableCount).CopyTo(selectableGroup);
-
-            var writeIndex = source.SelectableCount;
-            for (var i = 0; i < source.ExpandedCount; i++)
-            {
-                var tileIndex = source.Expanded[i];
-                if (tileIndex == expandedTileIndex)
-                    continue;
-
-                selectableGroup[writeIndex++] = tileIndex;
-            }
-
             var context = _contexts.Count > 0
                 ? _contexts.Pop()
-                : new FseContext();
+                : new FseContext(_matchRequireCount, _wordCount);
 
-            context.Initialize(
-                source.Suit,
-                fixedGroup,
-                source.FixedCount + 1,
-                RentFixedBits(source.FixedBits, expandedTileIndex),
-                selectableGroup,
-                selectableCount,
-                RentSelectableBits(
-                    selectableGroup.AsSpan(0, selectableCount),
-                    newExpanded),
-                RentCopy(newExpanded),
-                newExpanded.Length);
+            context.InitializeAdvanced(
+                source,
+                expandedTileIndex,
+                expandedBits,
+                expandedCount);
 
             return context;
         }
 
         public void Return(FseContext context)
         {
-            ReturnArray(context.Fixed, context.FixedCount);
-            ReturnBitArray(context.FixedBits);
-            ReturnArray(context.Selectable, context.SelectableCount);
-            ReturnBitArray(context.SelectableBitsAfterFixed);
-            ReturnArray(context.Expanded, context.ExpandedCount);
-
             context.Reset();
             _contexts.Push(context);
-        }
-
-        private int[] RentCopy(ReadOnlySpan<int> source)
-        {
-            if (source.IsEmpty)
-                return [];
-
-            var destination = _arrayPool.Rent(source.Length);
-            source.CopyTo(destination);
-            return destination;
-        }
-
-        private ulong[] RentSelectableBits(
-            ReadOnlySpan<int> selectableGroup,
-            ReadOnlySpan<int> expandedGroup)
-        {
-            if (_wordCount == 0)
-                return [];
-
-            var bits = _bitArrayPool.Rent(_wordCount);
-            bits.AsSpan(0, _wordCount).Clear();
-
-            foreach (var tileIndex in selectableGroup)
-                BitSetOperations.Set(bits.AsSpan(0, _wordCount), tileIndex);
-
-            foreach (var tileIndex in expandedGroup)
-                BitSetOperations.Set(bits.AsSpan(0, _wordCount), tileIndex);
-
-            return bits;
-        }
-
-        private ulong[] RentBits(ReadOnlySpan<int> tileIndexes)
-        {
-            if (_wordCount == 0)
-                return [];
-
-            var bits = _bitArrayPool.Rent(_wordCount);
-            bits.AsSpan(0, _wordCount).Clear();
-
-            foreach (var tileIndex in tileIndexes)
-                BitSetOperations.Set(bits.AsSpan(0, _wordCount), tileIndex);
-
-            return bits;
-        }
-
-        private ulong[] RentFixedBits(ulong[] sourceFixedBits, int extraTileIndex)
-        {
-            if (_wordCount == 0)
-                return [];
-
-            var bits = _bitArrayPool.Rent(_wordCount);
-            sourceFixedBits.AsSpan(0, _wordCount).CopyTo(bits);
-            BitSetOperations.Set(bits.AsSpan(0, _wordCount), extraTileIndex);
-
-            return bits;
-        }
-
-        private void ReturnArray(int[] array, int count)
-        {
-            if (array.Length == 0)
-                return;
-
-            Array.Clear(array, 0, count);
-            _arrayPool.Return(array);
-        }
-
-        private void ReturnBitArray(ulong[] array)
-        {
-            if (array.Length == 0)
-                return;
-
-            Array.Clear(array, 0, _wordCount);
-            _bitArrayPool.Return(array);
         }
     }
 }

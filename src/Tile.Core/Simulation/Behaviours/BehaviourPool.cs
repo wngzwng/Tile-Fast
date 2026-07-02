@@ -1,53 +1,43 @@
-using System.Buffers;
-
 namespace Tile.Core.Simulation;
 
 /// <summary>
-/// Behaviour 对象池；内部使用 <see cref="ArrayPool{T}"/> 分配 SelectIds 数组。
+/// Behaviour 对象池；不拥有外部资源，也不追踪借出对象。
 /// </summary>
-public sealed class BehaviourPool : IDisposable
+public sealed class BehaviourPool
 {
-    private readonly ArrayPool<int> _arrayPool;
     private readonly Stack<Behaviour> _behaviours = new();
-    private readonly HashSet<Behaviour> _borrowedBehaviours = [];
-    private readonly HashSet<Behaviour> _returnedBehaviours = [];
+    private readonly int _defaultSelectCapacity;
     private readonly int _maxRetainedBehaviours;
-    private bool _disposed;
 
     public BehaviourPool(
-        ArrayPool<int>? arrayPool = null,
-        int maxRetainedBehaviours = 256)
+        int defaultSelectCapacity,
+        int maxRetainedBehaviours = 32)
     {
+        if (defaultSelectCapacity < 0)
+            throw new ArgumentOutOfRangeException(nameof(defaultSelectCapacity));
         if (maxRetainedBehaviours < 0)
             throw new ArgumentOutOfRangeException(nameof(maxRetainedBehaviours));
 
-        _arrayPool = arrayPool ?? ArrayPool<int>.Shared;
+        _defaultSelectCapacity = defaultSelectCapacity;
         _maxRetainedBehaviours = maxRetainedBehaviours;
     }
 
     /// <summary>
-    /// 租借一个 Behaviour，并把 selectIds 复制到池化数组中。
+    /// 租借一个 Behaviour，并把 selectIds 复制到 Behaviour 自持 buffer 中。
     /// </summary>
     public Behaviour Rent(
         BehaviourKind kind,
         int color,
         ReadOnlySpan<int> selectIds)
     {
-        ThrowIfDisposed();
-
-        var buffer = RentSelectBuffer(selectIds);
         var behaviour = _behaviours.Count == 0
-            ? new Behaviour()
+            ? new Behaviour(_defaultSelectCapacity)
             : _behaviours.Pop();
 
         behaviour.Initialize(
-            this,
             kind,
             color,
-            buffer,
-            selectIds.Length);
-        _borrowedBehaviours.Add(behaviour);
-        _returnedBehaviours.Remove(behaviour);
+            selectIds);
 
         return behaviour;
     }
@@ -56,56 +46,9 @@ public sealed class BehaviourPool : IDisposable
     {
         ArgumentNullException.ThrowIfNull(behaviour);
 
-        if (!_borrowedBehaviours.Remove(behaviour))
-            return;
-
-        _returnedBehaviours.Add(behaviour);
-
-        var selectIds = behaviour.DetachSelectIds(out var selectCount);
-        ReturnSelectBuffer(selectIds, selectCount);
-
-        if (_disposed)
-            return;
+        behaviour.Reset();
 
         if (_behaviours.Count < _maxRetainedBehaviours)
             _behaviours.Push(behaviour);
-    }
-
-    public void Dispose()
-    {
-        if (_borrowedBehaviours.Count > 0)
-            throw new InvalidOperationException($"BehaviourPool still has {_borrowedBehaviours.Count} borrowed behaviour(s).");
-
-        _disposed = true;
-        _returnedBehaviours.Clear();
-        _behaviours.Clear();
-    }
-
-    private int[] RentSelectBuffer(ReadOnlySpan<int> selectIds)
-    {
-        if (selectIds.IsEmpty)
-            return [];
-
-        var buffer = _arrayPool.Rent(selectIds.Length);
-        selectIds.CopyTo(buffer);
-
-        return buffer;
-    }
-
-    private void ReturnSelectBuffer(
-        int[] selectIds,
-        int selectCount)
-    {
-        if (selectIds.Length == 0)
-            return;
-
-        Array.Clear(selectIds, 0, selectCount);
-        _arrayPool.Return(selectIds);
-    }
-
-    private void ThrowIfDisposed()
-    {
-        if (_disposed)
-            throw new ObjectDisposedException(nameof(BehaviourPool));
     }
 }

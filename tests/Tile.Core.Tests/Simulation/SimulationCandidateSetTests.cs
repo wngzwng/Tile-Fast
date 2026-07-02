@@ -26,7 +26,7 @@ public sealed class SimulationCandidateSetTests
     [Test]
     public void SetSelected_WhenModeIsBehaviour_ReturnsSelectedBehaviour()
     {
-        using var candidates = new BehaviourCandidateSet();
+        using var candidates = new BehaviourCandidateSet(defaultSelectCapacity: 7);
         var behaviour = candidates.Rent(
             BehaviourKind.GeneralClear,
             color: 1,

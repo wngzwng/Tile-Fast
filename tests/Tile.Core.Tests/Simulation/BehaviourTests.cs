@@ -9,8 +9,8 @@ public sealed class BehaviourTests
     [Test]
     public void Rent_WithEmptySelectIds_ReturnsEmptyBehaviour()
     {
-        using var pool = new BehaviourPool();
-        using var behaviour = pool.Rent(
+        using var candidates = new BehaviourCandidateSet(defaultSelectCapacity: 7);
+        var behaviour = candidates.Rent(
             BehaviourKind.EasyClear,
             color: 1,
             selectIds: []);
@@ -22,8 +22,8 @@ public sealed class BehaviourTests
     [Test]
     public void Count_ReturnsSelectIdsLength()
     {
-        using var pool = new BehaviourPool();
-        using var behaviour = pool.Rent(
+        using var candidates = new BehaviourCandidateSet(defaultSelectCapacity: 7);
+        var behaviour = candidates.Rent(
             BehaviourKind.HardClear,
             color: 7,
             selectIds: [1, 2, 3]);
@@ -34,8 +34,8 @@ public sealed class BehaviourTests
     [Test]
     public void ToMoves_ReturnsSelectMovesInOrder()
     {
-        using var pool = new BehaviourPool();
-        using var behaviour = pool.Rent(
+        using var candidates = new BehaviourCandidateSet(defaultSelectCapacity: 7);
+        var behaviour = candidates.Rent(
             BehaviourKind.GeneralClear,
             color: 7,
             selectIds: [3, 1, 4]);
@@ -50,8 +50,8 @@ public sealed class BehaviourTests
     [Test]
     public void ToString_ReturnsStableSummary()
     {
-        using var pool = new BehaviourPool();
-        using var behaviour = pool.Rent(
+        using var candidates = new BehaviourCandidateSet(defaultSelectCapacity: 7);
+        var behaviour = candidates.Rent(
             BehaviourKind.Flip,
             color: 5,
             selectIds: [2, 8]);
@@ -62,17 +62,18 @@ public sealed class BehaviourTests
     }
 
     [Test]
-    public void Rent_ReusesReturnedBehaviourObject()
+    public void Clear_ReusesReturnedBehaviourObject()
     {
-        using var pool = new BehaviourPool();
-        var first = pool.Rent(
+        using var candidates = new BehaviourCandidateSet(defaultSelectCapacity: 7);
+        var first = candidates.Rent(
             BehaviourKind.EasyClear,
             color: 1,
             selectIds: [1]);
+        candidates.Add(first);
 
-        first.Dispose();
+        candidates.Clear();
 
-        using var second = pool.Rent(
+        var second = candidates.Rent(
             BehaviourKind.HardClear,
             color: 2,
             selectIds: [2, 3]);
@@ -84,58 +85,29 @@ public sealed class BehaviourTests
     }
 
     [Test]
-    public void Rent_WhenPoolIsDisposed_Throws()
+    public void Clear_InvalidatesReturnedBehaviour()
     {
-        var pool = new BehaviourPool();
-        pool.Dispose();
-
-        Assert.Throws<ObjectDisposedException>(() =>
-            pool.Rent(
-                BehaviourKind.EasyClear,
-                color: 1,
-                selectIds: [1]));
-    }
-
-    [Test]
-    public void Dispose_WhenBorrowedBehaviourIsNotReturned_Throws()
-    {
-        var pool = new BehaviourPool();
-        var behaviour = pool.Rent(
+        using var candidates = new BehaviourCandidateSet(defaultSelectCapacity: 7);
+        var behaviour = candidates.Rent(
             BehaviourKind.EasyClear,
             color: 1,
             selectIds: [1]);
+        candidates.Add(behaviour);
 
-        Assert.Throws<InvalidOperationException>(() => pool.Dispose());
+        candidates.Clear();
 
-        behaviour.Dispose();
-        pool.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => _ = behaviour.Count);
     }
 
     [Test]
-    public void Dispose_WhenBorrowedBehaviourIsReturned_DoesNotThrow()
+    public void Rent_WhenSelectIdsExceedDefaultCapacity_ExpandsBehaviourBuffer()
     {
-        var pool = new BehaviourPool();
-        var behaviour = pool.Rent(
-            BehaviourKind.EasyClear,
-            color: 1,
-            selectIds: [1]);
+        using var candidates = new BehaviourCandidateSet(defaultSelectCapacity: 1);
+        var behaviour = candidates.Rent(
+            BehaviourKind.HardClear,
+            color: 2,
+            selectIds: [4, 5, 6]);
 
-        behaviour.Dispose();
-
-        Assert.DoesNotThrow(() => pool.Dispose());
-    }
-
-    [Test]
-    public void DisposeBehaviour_WhenReturnedTwice_DoesNotRecycleAgain()
-    {
-        using var pool = new BehaviourPool();
-        var behaviour = pool.Rent(
-            BehaviourKind.EasyClear,
-            color: 1,
-            selectIds: [1]);
-
-        behaviour.Dispose();
-
-        Assert.DoesNotThrow(() => behaviour.Dispose());
+        Assert.That(behaviour.SelectIds.ToArray(), Is.EqualTo(new[] { 4, 5, 6 }));
     }
 }
